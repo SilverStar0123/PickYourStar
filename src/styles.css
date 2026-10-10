@@ -372,3 +372,151 @@ h1 {
   font-size: 0.85rem;
   margin: 0 0 24px;
 }
+
+
+/* 일치율 */
+.board-options {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0 0 16px;
+  font-size: 0.95rem;
+}
+.board-options .toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-weight: bold;
+}
+.board-options .toggle.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.board-options select {
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+.hint-inline {
+  color: #999;
+  font-size: 0.85rem;
+}
+.match-subtitle {
+  text-align: center;
+  margin: 0 0 24px;
+  color: #888;
+  font-size: 0.9rem;
+}
+.compare-match {
+  width: 72px;
+  flex-shrink: 0;
+  margin-left: 14px;
+  text-align: center;
+}
+.match-head {
+  margin-bottom: 15px;
+  font-weight: bold;
+  font-size: 0.9rem;
+  color: #333;
+}
+.match-percent {
+  font-weight: bold;
+  font-size: 1.1rem;
+  color: #555;
+}
+.match-count {
+  font-size: 0.72rem;
+  color: #999;
+}
+.match-best .match-percent {
+  color: #ff6b6b;
+}
+.match-base {
+  font-size: 0.8rem;
+  font-weight: bold;
+  color: #4dabf7;
+}
+.compare-slot.matched img {
+  border: 2px solid #ff6b6b;
+}
+
+
+/* 내가 참여한 방 목록 */
+.my-rooms {
+  max-width: 560px;
+  margin: 0 auto 24px;
+  padding: 10px 16px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+.my-rooms summary {
+  cursor: pointer;
+  font-weight: bold;
+  color: #555;
+}
+.my-rooms ul {
+  list-style: none;
+  margin: 10px 0 6px;
+  padding: 0;
+}
+.my-rooms li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid #f0f0f0;
+}
+.my-rooms li.current {
+  background: #f3f9ff;
+}
+.room-link {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 10px 4px;
+  background: none;
+  border: none;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+.room-link:disabled {
+  cursor: default;
+}
+.room-nick {
+  font-weight: bold;
+  color: #ff6b6b;
+  font-size: 0.85rem;
+}
+.room-date,
+.room-code {
+  color: #999;
+  font-size: 0.8rem;
+}
+.room-now {
+  color: #1c7ed6;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+.room-remove {
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  color: #aaa;
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+.room-remove:hover {
+  color: #ff6b6b;
+}
+
+.room-title {
+  font-weight: bold;
+  color: #333;
+}

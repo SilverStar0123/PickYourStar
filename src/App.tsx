@@ -7,6 +7,8 @@ import {
   collection,
   doc,
   setDoc,
+  updateDoc,
+  writeBatch,
   onSnapshot,
   serverTimestamp,
   Timestamp,
@@ -89,6 +91,7 @@ const agencyConfig: AgencyConfig[] = [
 ];
 
 const MAX_NICKNAME_LENGTH = 20;
+const MAX_ROOM_NAME = 30;
 const ROOM_ID_PATTERN = /^[a-z0-9]{6,24}$/;
 
 // ───────────────────────── 유틸 ─────────────────────────
@@ -262,6 +265,53 @@ function getStatsId(): string {
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
 
+// ── 내가 참여한 방 목록 (이 브라우저에만 저장, 로그인 불필요) ──
+interface MyRoom {
+  id: string;
+  nickname: string;
+  lastAt: number; // 마지막으로 제출한 시각(표시용, 이 기기 시계 기준)
+  roomName?: string; // 방 이름 (없으면 이름 없는 방)
+}
+const MY_ROOMS_KEY = "es_my_rooms";
+const MY_ROOMS_MAX = 30;
+
+function loadMyRooms(): MyRoom[] {
+  try {
+    const raw = window.localStorage.getItem(MY_ROOMS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter(
+        (x) =>
+          x &&
+          typeof x.id === "string" &&
+          ROOM_ID_PATTERN.test(x.id) &&
+          typeof x.nickname === "string" &&
+          typeof x.lastAt === "number"
+      )
+      .map((x) => ({
+        id: x.id,
+        nickname: x.nickname,
+        lastAt: x.lastAt,
+        roomName: typeof x.roomName === "string" ? x.roomName : ""
+      }))
+      .slice(0, MY_ROOMS_MAX);
+  } catch {
+    return [];
+  }
+}
+
+function saveMyRooms(list: MyRoom[]) {
+  try {
+    window.localStorage.setItem(MY_ROOMS_KEY, JSON.stringify(list));
+  } catch {
+    /* 저장소를 못 쓰는 환경이면 이번 접속에서만 유지 */
+  }
+}
+
+const formatDate = (ms: number) => new Date(ms).toLocaleDateString("ko-KR");
+
 const safeFileName = (s: string) => s.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40) || "my";
 
 // 화면의 한 영역을 PNG로 저장. expand=true면 가로 스크롤 영역을 전부 펼쳐서 캡처
@@ -314,6 +364,11 @@ export default function App() {
   const listRef = useRef<HTMLDivElement>(null);
   const [listWidth, setListWidth] = useState(0);
   const [logoRatios, setLogoRatios] = useState<Record<string, number>>({});
+  const [myRooms, setMyRooms] = useState<MyRoom[]>(() => loadMyRooms());
+  const [roomName, setRoomName] = useState(""); // 현재 방의 이름 (서버)
+  const [roomOwner, setRoomOwner] = useState<string | null>(null); // 현재 방을 만든 사람의 uid
+  const [roomMetaLoaded, setRoomMetaLoaded] = useState(false);
+  const [roomNameInput, setRoomNameInput] = useState(""); // 새 방을 만들 때 입력하는 이름
   const [showMatch, setShowMatch] = useState(false); // 결과표의 일치율 표시 on/off
   const [baseChoice, setBaseChoice] = useState<string | null>(null); // 일치율 기준 참여자
 
@@ -408,6 +463,35 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  // ── 방 정보(이름, 만든 사람) 구독: rooms/{roomId}
+  useEffect(() => {
+    if (!roomId || !uid) return;
+    const unsub = onSnapshot(
+      doc(db, "rooms", roomId),
+      (snap) => {
+        const d = snap.exists() ? snap.data() : null;
+        setRoomName(d && typeof d.name === "string" ? d.name : "");
+        setRoomOwner(d && typeof d.ownerUid === "string" ? d.ownerUid : null);
+        setRoomMetaLoaded(true);
+      },
+      (err) => console.warn("방 정보 구독 에러:", err)
+    );
+    return () => unsub();
+  }, [roomId, uid]);
+
+  // 방 이름이 바뀌면 '내가 참여한 방' 목록의 이름도 맞춰 둠
+  useEffect(() => {
+    if (!roomId || !roomMetaLoaded) return;
+    setMyRooms((prev) => {
+      const idx = prev.findIndex((r) => r.id === roomId);
+      if (idx < 0 || (prev[idx].roomName || "") === roomName) return prev;
+      const next = [...prev];
+      next[idx] = { ...next[idx], roomName };
+      saveMyRooms(next);
+      return next;
+    });
+  }, [roomId, roomName, roomMetaLoaded]);
 
   // ── 방 실시간 구독: rooms/{roomId}/users/{uid}
   useEffect(() => {
@@ -615,14 +699,39 @@ export default function App() {
       });
 
       // 문서 id = 내 uid → 내 데이터만 쓸 수 있고, 닉네임이 같아도 서로 다른 문서로 저장됨
-      await setDoc(doc(db, "rooms", rid, "users", uid), {
+      const userRef = doc(db, "rooms", rid, "users", uid);
+      const userData = {
         nickname: trimmedName,
         picks: cleanPicks,
         // 처음 제출할 때만 서버 시간이 기록되고, 수정할 때는 기존 값을 그대로 유지
         joinedAt: roomUsers[uid]?.joinedTs ?? serverTimestamp()
-      });
+      };
+
+      const creating = !roomId;
+      const newRoomName = roomNameInput.trim().slice(0, MAX_ROOM_NAME);
+      if (creating) {
+        // 새 방: 방 정보(이름, 만든 사람)와 내 기록을 한 번에(둘 다 성공하거나 둘 다 실패) 저장
+        const batch = writeBatch(db);
+        batch.set(doc(db, "rooms", rid), { name: newRoomName, ownerUid: uid });
+        batch.set(userRef, userData);
+        await batch.commit();
+      } else {
+        await setDoc(userRef, userData);
+      }
 
       sendAnonymousStats(cleanPicks);
+
+      const nextRooms = [
+        {
+          id: rid,
+          nickname: trimmedName,
+          lastAt: Date.now(),
+          roomName: creating ? newRoomName : roomName
+        },
+        ...myRooms.filter((r) => r.id !== rid)
+      ].slice(0, MY_ROOMS_MAX);
+      setMyRooms(nextRooms);
+      saveMyRooms(nextRooms);
 
       if (!roomId) {
         window.history.replaceState({}, "", `?room=${rid}`);
@@ -669,10 +778,55 @@ export default function App() {
     window.history.replaceState({}, "", window.location.pathname);
     setRoomId(null);
     setRoomUsers({});
+    setRoomName("");
+    setRoomOwner(null);
+    setRoomMetaLoaded(false);
+    setRoomNameInput("");
     setRoomError(false);
     setRoomLoaded(true);
     setShowResult(false);
     window.scrollTo({ top: 0 });
+  };
+
+  // 내가 참여했던 방으로 이동 (그 방에 낸 내 픽은 자동으로 다시 불러옴)
+  const openRoom = (id: string) => {
+    if (id === roomId) return;
+    if (pickedCount > 0) {
+      const ok = window.confirm("다른 방으로 이동하면 지금 고르던 픽은 사라져요. 이동할까요?");
+      if (!ok) return;
+    }
+    window.history.replaceState({}, "", `${window.location.pathname}?room=${id}`);
+    restored.current = false;
+    setPicks({});
+    setRoomUsers({});
+    setRoomName("");
+    setRoomOwner(null);
+    setRoomMetaLoaded(false);
+    setRoomError(false);
+    setRoomLoaded(false);
+    setRoomId(id);
+    setShowResult(true);
+    window.scrollTo({ top: 0 });
+  };
+
+  // 방을 만든 사람만 이름 변경 가능 (규칙에서도 막음)
+  const renameRoom = async () => {
+    if (!roomId || !uid || roomOwner !== uid) return;
+    const input = window.prompt(`새 방 이름 (최대 ${MAX_ROOM_NAME}자)`, roomName);
+    if (input === null) return;
+    try {
+      await updateDoc(doc(db, "rooms", roomId), { name: input.trim().slice(0, MAX_ROOM_NAME) });
+    } catch (err) {
+      console.error("방 이름 변경 에러:", err);
+      alert("방 이름을 바꾸지 못했습니다. 방을 만든 사람만 바꿀 수 있어요.");
+    }
+  };
+
+  // 목록에서만 지움 (방 자체나 서버의 기록은 그대로)
+  const removeMyRoom = (id: string) => {
+    const next = myRooms.filter((r) => r.id !== id);
+    setMyRooms(next);
+    saveMyRooms(next);
   };
 
   const saveBoardImage = async () => {
@@ -691,10 +845,45 @@ export default function App() {
 
   const myResultExists = !!uid && !!roomUsers[uid];
 
+  const myRoomsPanel =
+    myRooms.length > 0 ? (
+      <details className="my-rooms">
+        <summary>내가 참여한 방 ({myRooms.length})</summary>
+        <ul>
+          {myRooms.map((r) => (
+            <li key={r.id} className={r.id === roomId ? "current" : ""}>
+              <button
+                type="button"
+                className="room-link"
+                onClick={() => openRoom(r.id)}
+                disabled={r.id === roomId}
+              >
+                <span className="room-title">{r.roomName || "이름 없는 방"}</span>
+                <span className="room-nick">{r.nickname}</span>
+                <span className="room-date">{formatDate(r.lastAt)}</span>
+                <span className="room-code">{r.id.slice(0, 6)}…</span>
+                {r.id === roomId && <span className="room-now">현재 방</span>}
+              </button>
+              <button
+                type="button"
+                className="room-remove"
+                aria-label="목록에서 삭제"
+                onClick={() => removeMyRoom(r.id)}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+        <p className="hint-inline">이 기기에만 저장돼요. 목록에서 지워도 방 자체는 사라지지 않아요.</p>
+      </details>
+    ) : null;
+
   return (
     <div className="App">
       {!showResult ? (
         <>
+          {myRoomsPanel}
           <h1>최애 {totalGroups}명 고르기</h1>
           <p className="progress">
             {pickedCount} / {totalGroups}
@@ -706,7 +895,7 @@ export default function App() {
                 {roomError
                   ? "방 정보를 불러오지 못했습니다. 링크를 확인해주세요."
                   : roomLoaded
-                  ? `공유된 방에 참여 중 · 참여자 ${displayUsers.length}명`
+                  ? `공유된 방에 참여 중${roomName ? ` · ${roomName}` : ""} · 참여자 ${displayUsers.length}명`
                   : "방 정보를 불러오는 중..."}
               </span>
               {displayUsers.length > 0 && (
@@ -823,6 +1012,29 @@ export default function App() {
               공유 링크를 만들 때는 꼭 필요해요.
             </p>
 
+            {!roomId && (
+              <>
+                <div className="nickname-row">
+                  <label htmlFor="roomname">방 이름</label>
+                  <input
+                    id="roomname"
+                    type="text"
+                    value={roomNameInput}
+                    maxLength={MAX_ROOM_NAME}
+                    onChange={(e) => setRoomNameInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur();
+                    }}
+                    placeholder="예: 우리 모임 최애 모음 (선택)"
+                  />
+                </div>
+                <p className="hint">
+                  공유 링크를 만들 때만 정할 수 있어요. 결과표 이미지에 “방이름의 결과”로 표시되고,
+                  방을 만든 사람만 나중에 바꿀 수 있어요.
+                </p>
+              </>
+            )}
+
             <div className="finish-buttons">
               <button className="download-btn" onClick={savePersonalImage} style={{ backgroundColor: "#20c997" }}>
                 내 선택 이미지 저장
@@ -841,6 +1053,13 @@ export default function App() {
         </>
       ) : (
         <div className="result-view">
+          {myRoomsPanel}
+          {!roomLoaded && <p className="hint-inline" style={{ textAlign: "center" }}>방 정보를 불러오는 중...</p>}
+          {roomError && (
+            <p className="hint-inline" style={{ textAlign: "center" }}>
+              방 정보를 불러오지 못했습니다. 링크를 확인해주세요.
+            </p>
+          )}
           <div className="result-buttons">
             <button className="download-btn" onClick={copyLink} style={{ backgroundColor: "#4dabf7" }}>
               공유 링크 복사
@@ -854,6 +1073,11 @@ export default function App() {
             <button className="download-btn" onClick={startNewRoom} style={{ backgroundColor: "#868e96" }}>
               새 방 만들기
             </button>
+            {!!uid && roomOwner === uid && (
+              <button className="download-btn" onClick={renameRoom} style={{ backgroundColor: "#845ef7" }}>
+                방 이름 수정
+              </button>
+            )}
           </div>
 
           <div className="board-options">
@@ -889,7 +1113,9 @@ export default function App() {
             className="comparison-board"
             style={{ ["--slot" as any]: `${BOARD_SLOT}px`, ["--gap" as any]: `${BOARD_GAP}px` }}
           >
-            <h2 style={{ textAlign: "center", marginBottom: matchOn ? "6px" : "30px" }}>참여자별 픽 결과</h2>
+            <h2 style={{ textAlign: "center", marginBottom: matchOn ? "6px" : "30px" }}>
+              {roomName ? `${roomName}의 결과` : "참여자별 픽 결과"}
+            </h2>
             {matchOn && (
               <p className="match-subtitle">
                 {baseLabel}님 기준 일치율 · 같은 픽은 빨간 테두리
