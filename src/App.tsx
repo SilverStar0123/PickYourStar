@@ -698,11 +698,7 @@ export default function App() {
                     <div className="agency-groups-row">
                       {agency.groups.map((g) => (
                         <div key={`header-${g.id}`} className="compare-slot header-slot">
-                          <img
-                            src={g.logo}
-                            alt={g.name}
-                            style={{ width: "100%", height: "100%", objectFit: "contain" }}
-                          />
+                          <img src={g.logo} alt={g.name} className="header-logo" />
                         </div>
                       ))}
                     </div>

@@ -133,6 +133,8 @@ h1 {
 
 /* 비교 영역 */
 .comparison-board {
+  --slot: 72px; /* 결과표의 사진 한 칸 크기 (로고 크기도 여기에 맞춰짐) */
+  --gap: 10px;
   background: white;
   padding: 30px;
   border-radius: 20px;
@@ -180,17 +182,18 @@ h1 {
   padding-right: 0;
 }
 .agency-header-logo {
-  height: 28px;
-  margin-bottom: 10px;
+  height: 44px;
+  max-width: 300px;
+  margin-bottom: 8px;
   object-fit: contain;
 }
 .agency-groups-row {
   display: flex;
-  gap: 10px;
+  gap: var(--gap);
 }
 .compare-slot {
-  width: 60px;
-  height: 60px;
+  width: var(--slot);
+  height: var(--slot);
   flex-shrink: 0;
 }
 .compare-slot img {
@@ -201,12 +204,18 @@ h1 {
   border: 1px solid #ddd;
   box-sizing: border-box;
 }
+/* 유닛 로고: 배경 없이 흰 바탕에 비율 유지. 칸 + 간격만큼 폭을 쓰고 가운데 정렬 */
 .header-slot {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f0f0f0;
-  border-radius: 8px;
+  height: 56px;
+}
+.header-logo {
+  flex: none;
+  width: calc(var(--slot) + var(--gap));
+  height: 56px;
+  object-fit: contain;
 }
 .empty-pick {
   width: 100%;
@@ -285,7 +294,7 @@ h1 {
 }
 .personal-agency-logo {
   display: block;
-  height: 28px;
+  height: 40px;
   max-width: 100%;
   margin: 0 auto 10px;
   object-fit: contain;
