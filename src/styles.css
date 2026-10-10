@@ -135,7 +135,7 @@ h1 {
 
 /* 비교 영역 */
 .comparison-board {
-  --slot: 72px; /* 결과표의 사진 한 칸 크기 (로고 크기도 여기에 맞춰짐) */
+  --slot: 76px; /* 결과표의 사진 한 칸 크기 (로고 크기도 여기에 맞춰짐) */
   --gap: 10px;
   background: white;
   padding: 30px;
@@ -206,18 +206,21 @@ h1 {
   border: 1px solid #ddd;
   box-sizing: border-box;
 }
-/* 유닛 로고: 배경 없이 흰 바탕에 비율 유지. 칸 + 간격만큼 폭을 쓰고 가운데 정렬 */
-.header-slot {
+/* 유닛 로고: 배경·테두리 없이 흰 바탕에 비율 유지(잘리지 않게 contain).
+   ※ .compare-slot img 규칙(사진용: 꽉 채우기+테두리)보다 우선하도록 선택자를 구체적으로 씀 */
+.compare-slot.header-slot {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 56px;
+  height: 62px;
 }
-.header-logo {
+.compare-slot.header-slot .header-logo {
   flex: none;
-  width: calc(var(--slot) + var(--gap));
-  height: 56px;
+  width: calc(var(--slot) + var(--gap)); /* 칸 + 간격만큼 사용, 가운데 정렬 */
+  height: 100%;
   object-fit: contain;
+  border: none;
+  border-radius: 0;
 }
 .empty-pick {
   width: 100%;

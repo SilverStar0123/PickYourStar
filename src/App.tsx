@@ -13,6 +13,7 @@ import {
   DocumentData
 } from "firebase/firestore";
 import "./styles.css";
+import { layoutLogos } from "./logoLayout";
 import Papa from "papaparse";
 
 // ───────────────────────── Firebase ─────────────────────────
@@ -233,6 +234,10 @@ function balancedMaxWidth(count: number, availWidth: number): number {
   return perRow * ITEM_W + (perRow - 1) * ITEM_GAP;
 }
 
+// 결과표 사진 한 칸 크기/간격 (styles.css의 --slot, --gap 기본값과 같게)
+const BOARD_SLOT = 76;
+const BOARD_GAP = 10;
+
 const safeFileName = (s: string) => s.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40) || "my";
 
 // 화면의 한 영역을 PNG로 저장. expand=true면 가로 스크롤 영역을 전부 펼쳐서 캡처
@@ -284,6 +289,7 @@ export default function App() {
   const restored = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
   const [listWidth, setListWidth] = useState(0);
+  const [logoRatios, setLogoRatios] = useState<Record<string, number>>({});
 
   // ── 익명 로그인
   useEffect(() => {
@@ -412,6 +418,25 @@ export default function App() {
     return () => ro.disconnect();
   }, [agencies.length, showResult]);
 
+  // 유닛 로고의 가로세로 비율을 미리 읽어 둠 (결과표에서 로고 크기를 맞추는 데 사용)
+  useEffect(() => {
+    let cancelled = false;
+    agencies.forEach((a) =>
+      a.groups.forEach((g) => {
+        const im = new Image();
+        im.onload = () => {
+          if (cancelled || !im.naturalHeight) return;
+          const ratio = im.naturalWidth / im.naturalHeight;
+          setLogoRatios((prev) => (prev[g.id] === ratio ? prev : { ...prev, [g.id]: ratio }));
+        };
+        im.src = g.logo;
+      })
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [agencies]);
+
   // ── 파생 데이터
   const totalGroups = useMemo(() => agencies.reduce((s, a) => s + a.groups.length, 0), [agencies]);
   const memberMap = useMemo(() => {
@@ -428,6 +453,18 @@ export default function App() {
     () => Object.keys(picks).filter((g) => validGroupIds.has(g)).length,
     [picks, validGroupIds]
   );
+
+  // 소속사별 유닛 로고 크기 (비율이 다른 로고도 눈에 비슷한 크기로 보이게)
+  const logoBoxes = useMemo(() => {
+    const out: Record<string, { w: number; h: number }[]> = {};
+    agencies.forEach((a) => {
+      out[a.id] = layoutLogos(
+        a.groups.map((g) => logoRatios[g.id] ?? 1),
+        { pitch: BOARD_SLOT + BOARD_GAP }
+      );
+    });
+    return out;
+  }, [agencies, logoRatios]);
 
   // 닉네임이 겹치면 먼저 들어온 사람은 그대로, 이후 사람은 이름(2), 이름(3) …
   // 표시 순서는 먼저 제출한 사람이 위(오름차순)
@@ -751,7 +788,11 @@ export default function App() {
             </button>
           </div>
 
-          <div ref={boardRef} className="comparison-board">
+          <div
+            ref={boardRef}
+            className="comparison-board"
+            style={{ ["--slot" as any]: `${BOARD_SLOT}px`, ["--gap" as any]: `${BOARD_GAP}px` }}
+          >
             <h2 style={{ textAlign: "center", marginBottom: "30px" }}>참여자별 픽 결과</h2>
 
             <div className="user-compare-row header-row">
@@ -761,11 +802,19 @@ export default function App() {
                   <div key={`header-${agency.id}`} className="compare-agency-section">
                     <img src={agency.logo} alt={agency.name} className="agency-header-logo" />
                     <div className="agency-groups-row">
-                      {agency.groups.map((g) => (
-                        <div key={`header-${g.id}`} className="compare-slot header-slot">
-                          <img src={g.logo} alt={g.name} className="header-logo" />
-                        </div>
-                      ))}
+                      {agency.groups.map((g, gi) => {
+                        const box = logoBoxes[agency.id]?.[gi];
+                        return (
+                          <div key={`header-${g.id}`} className="compare-slot header-slot">
+                            <img
+                              src={g.logo}
+                              alt={g.name}
+                              className="header-logo"
+                              style={box ? { width: box.w, height: box.h } : undefined}
+                            />
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
