@@ -8,6 +8,8 @@ import {
   doc,
   setDoc,
   onSnapshot,
+  serverTimestamp,
+  Timestamp,
   DocumentData
 } from "firebase/firestore";
 import "./styles.css";
@@ -54,7 +56,8 @@ type Picks = Record<string, string>;
 interface UserDoc {
   nickname: string;
   picks: Picks;
-  joinedAt: number;
+  joinedAt: number; // 정렬용 (밀리초)
+  joinedTs: Timestamp; // 서버가 기록한 최초 제출 시각 (수정 시 그대로 다시 보냄)
 }
 type RoomUsers = Record<string, UserDoc>; // key = 기기(익명 로그인) uid
 
@@ -201,17 +204,35 @@ function generateRoomId(): string {
 }
 
 function parseUserDoc(data: DocumentData): UserDoc | null {
-  if (typeof data.nickname !== "string" || typeof data.joinedAt !== "number") return null;
+  if (typeof data.nickname !== "string" || !(data.joinedAt instanceof Timestamp)) return null;
   const picks: Picks = {};
   if (data.picks && typeof data.picks === "object") {
     Object.entries(data.picks).forEach(([g, m]) => {
       if (typeof m === "string") picks[g] = m;
     });
   }
-  return { nickname: data.nickname.slice(0, MAX_NICKNAME_LENGTH), picks, joinedAt: data.joinedAt };
+  return {
+    nickname: data.nickname.slice(0, MAX_NICKNAME_LENGTH),
+    picks,
+    joinedAt: data.joinedAt.toMillis(),
+    joinedTs: data.joinedAt
+  };
 }
 
 // ───────────────────────── 앱 ─────────────────────────
+// 선택 화면 멤버 한 칸 크기(CSS의 .member-wrapper 너비, .members 간격과 맞출 것)
+const ITEM_W = 84;
+const ITEM_GAP = 12;
+const CARD_PADDING = 40; // .agency-container 좌우 패딩 합
+
+// 한 줄에 다 안 들어가면 줄마다 인원을 고르게 나눔 (예: 5명 → 4+1 대신 3+2)
+function balancedMaxWidth(count: number, availWidth: number): number {
+  const maxPerRow = Math.max(1, Math.floor((availWidth + ITEM_GAP) / (ITEM_W + ITEM_GAP)));
+  const rows = Math.ceil(count / maxPerRow);
+  const perRow = Math.ceil(count / rows);
+  return perRow * ITEM_W + (perRow - 1) * ITEM_GAP;
+}
+
 const safeFileName = (s: string) => s.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40) || "my";
 
 // 화면의 한 영역을 PNG로 저장. expand=true면 가로 스크롤 영역을 전부 펼쳐서 캡처
@@ -261,6 +282,8 @@ export default function App() {
   const personalRef = useRef<HTMLDivElement>(null);
   const nicknameRef = useRef<HTMLInputElement>(null);
   const restored = useRef(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [listWidth, setListWidth] = useState(0);
 
   // ── 익명 로그인
   useEffect(() => {
@@ -362,7 +385,7 @@ export default function App() {
       (snap) => {
         const users: RoomUsers = {};
         snap.forEach((d) => {
-          const parsed = parseUserDoc(d.data());
+          const parsed = parseUserDoc(d.data({ serverTimestamps: "estimate" }));
           if (parsed) users[d.id] = parsed;
         });
         setRoomUsers(users);
@@ -377,6 +400,17 @@ export default function App() {
     );
     return () => unsub();
   }, [roomId, uid]);
+
+  // 선택 화면 폭을 측정해서 멤버 줄바꿈을 균형 있게 계산
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    setListWidth(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => setListWidth(entries[0].contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [agencies.length, showResult]);
 
   // ── 파생 데이터
   const totalGroups = useMemo(() => agencies.reduce((s, a) => s + a.groups.length, 0), [agencies]);
@@ -396,19 +430,17 @@ export default function App() {
   );
 
   // 닉네임이 겹치면 먼저 들어온 사람은 그대로, 이후 사람은 이름(2), 이름(3) …
-  // 표시 순서는 최근 참여자가 위
+  // 표시 순서는 먼저 제출한 사람이 위(오름차순)
   const displayUsers = useMemo(() => {
     const asc = Object.entries(roomUsers)
       .map(([id, u]) => ({ id, ...u }))
       .sort((a, b) => a.joinedAt - b.joinedAt || a.id.localeCompare(b.id));
     const seen: Record<string, number> = {};
-    return asc
-      .map((u) => {
-        const key = u.nickname.toLowerCase();
-        seen[key] = (seen[key] || 0) + 1;
-        return { ...u, label: seen[key] === 1 ? u.nickname : `${u.nickname}(${seen[key]})` };
-      })
-      .reverse();
+    return asc.map((u) => {
+      const key = u.nickname.toLowerCase();
+      seen[key] = (seen[key] || 0) + 1;
+      return { ...u, label: seen[key] === 1 ? u.nickname : `${u.nickname}(${seen[key]})` };
+    });
   }, [roomUsers]);
 
   // 같은 기기로 이 방에 이미 제출한 적이 있으면 닉네임과 픽을 한 번만 복원
@@ -469,6 +501,10 @@ export default function App() {
       alert("서버에 연결 중이거나 연결에 실패했습니다. 잠시 후 다시 시도해주세요.");
       return;
     }
+    if (roomId && !roomLoaded) {
+      alert("방 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -482,7 +518,8 @@ export default function App() {
       await setDoc(doc(db, "rooms", rid, "users", uid), {
         nickname: trimmedName,
         picks: cleanPicks,
-        joinedAt: roomUsers[uid]?.joinedAt ?? Date.now()
+        // 처음 제출할 때만 서버 시간이 기록되고, 수정할 때는 기존 값을 그대로 유지
+        joinedAt: roomUsers[uid]?.joinedTs ?? serverTimestamp()
       });
 
       if (!roomId) {
@@ -519,6 +556,21 @@ export default function App() {
     } catch {
       alert("복사에 실패했습니다. 주소창의 링크를 직접 복사해주세요.");
     }
+  };
+
+  // 지금 방에서 나가 새 방을 만들 준비: 고른 픽과 닉네임은 유지, 기존 방의 제출 기록은 그대로 남음
+  const startNewRoom = () => {
+    const ok = window.confirm(
+      "새 방을 만들까요?\n지금 고른 픽과 닉네임은 그대로 두고, 공유 링크만 새로 만들 수 있어요.\n(지금 방에 낸 내 기록은 그대로 남아요)"
+    );
+    if (!ok) return;
+    window.history.replaceState({}, "", window.location.pathname);
+    setRoomId(null);
+    setRoomUsers({});
+    setRoomError(false);
+    setRoomLoaded(true);
+    setShowResult(false);
+    window.scrollTo({ top: 0 });
   };
 
   const saveBoardImage = async () => {
@@ -560,17 +612,27 @@ export default function App() {
                   다른 사람 결과 보기
                 </button>
               )}
+              <button type="button" className="ghost" onClick={startNewRoom}>
+                새 방 만들기
+              </button>
             </div>
           )}
 
-          <div className="agency-list">
+          <div className="agency-list" ref={listRef}>
             {agencies.map((agency) => (
               <div key={agency.id} className="agency-container">
                 <h2 className="agency-title">{agency.name}</h2>
                 {agency.groups.map((g) => (
                   <div key={g.id} className="group-row">
                     <div className="group-name">{g.name}</div>
-                    <div className="members">
+                    <div
+                      className="members"
+                      style={
+                        listWidth
+                          ? { maxWidth: balancedMaxWidth(g.members.length, listWidth - CARD_PADDING) }
+                          : undefined
+                      }
+                    >
                       {g.members.map((m) => {
                         const selected = picks[g.id] === m.id;
                         return (
@@ -683,6 +745,9 @@ export default function App() {
             </button>
             <button className="download-btn" onClick={saveBoardImage} style={{ backgroundColor: "#20c997" }}>
               결과표 이미지 저장
+            </button>
+            <button className="download-btn" onClick={startNewRoom} style={{ backgroundColor: "#868e96" }}>
+              새 방 만들기
             </button>
           </div>
 
