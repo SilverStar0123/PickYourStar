@@ -212,13 +212,40 @@ function parseUserDoc(data: DocumentData): UserDoc | null {
 }
 
 // ───────────────────────── 앱 ─────────────────────────
+const safeFileName = (s: string) => s.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40) || "my";
+
+// 화면의 한 영역을 PNG로 저장. expand=true면 가로 스크롤 영역을 전부 펼쳐서 캡처
+async function captureToPng(target: HTMLElement, filename: string, expand = false) {
+  const originalOverflow = target.style.overflow;
+  const originalWidth = target.style.width;
+  if (expand) {
+    target.style.overflow = "visible";
+    target.style.width = `${target.scrollWidth}px`;
+  }
+  try {
+    const canvas = await html2canvas(target, {
+      useCORS: true,
+      scale: 2,
+      backgroundColor: "#ffffff"
+    });
+    const link = document.createElement("a");
+    link.download = filename;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  } finally {
+    if (expand) {
+      target.style.overflow = originalOverflow;
+      target.style.width = originalWidth;
+    }
+  }
+}
+
 export default function App() {
-  // 인증(익명) — 기기(브라우저)마다 고유한 uid가 생깁니다.
+  // 인증(익명) — 공유(저장)할 때만 필요합니다. 실패해도 선택/이미지 저장은 가능
   const [uid, setUid] = useState<string | null>(null);
   const [authError, setAuthError] = useState(false);
 
   const [nickname, setNickname] = useState("");
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [picks, setPicks] = useState<Picks>({});
 
   const [roomId, setRoomId] = useState<string | null>(() => parseRoomId());
@@ -229,8 +256,11 @@ export default function App() {
   const [showResult, setShowResult] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [agencies, setAgencies] = useState<Agency[]>([]);
-  const captureRef = useRef<HTMLDivElement>(null);
-  const prefilled = useRef(false);
+
+  const boardRef = useRef<HTMLDivElement>(null);
+  const personalRef = useRef<HTMLDivElement>(null);
+  const nicknameRef = useRef<HTMLInputElement>(null);
+  const restored = useRef(false);
 
   // ── 익명 로그인
   useEffect(() => {
@@ -348,14 +378,6 @@ export default function App() {
     return () => unsub();
   }, [roomId, uid]);
 
-  // 같은 기기로 다시 들어오면 예전 닉네임을 미리 채워줌
-  useEffect(() => {
-    if (uid && roomUsers[uid] && !prefilled.current) {
-      prefilled.current = true;
-      setNickname((cur) => cur || roomUsers[uid].nickname);
-    }
-  }, [uid, roomUsers]);
-
   // ── 파생 데이터
   const totalGroups = useMemo(() => agencies.reduce((s, a) => s + a.groups.length, 0), [agencies]);
   const memberMap = useMemo(() => {
@@ -389,37 +411,63 @@ export default function App() {
       .reverse();
   }, [roomUsers]);
 
-  // ── 핸들러
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault(); // form 제출 → 엔터키로도 입장 (한글 입력 중복 방지)
-    if (!uid) return;
-    const name = nickname.trim();
-    if (!name) return alert("닉네임을 입력해주세요.");
-    if (name.length > MAX_NICKNAME_LENGTH) {
-      return alert(`닉네임은 ${MAX_NICKNAME_LENGTH}자 이하로 입력해주세요.`);
-    }
-
-    // 같은 기기(uid)로 이미 제출한 적이 있으면 내 픽을 복원
+  // 같은 기기로 이 방에 이미 제출한 적이 있으면 닉네임과 픽을 한 번만 복원
+  useEffect(() => {
+    if (restored.current || !uid || agencies.length === 0) return;
     const mine = roomUsers[uid];
-    if (mine) {
-      const restored: Picks = {};
+    if (!mine) return;
+    restored.current = true;
+    setNickname((cur) => cur || mine.nickname);
+    setPicks((cur) => {
+      if (Object.keys(cur).length > 0) return cur; // 이미 고르기 시작했다면 덮어쓰지 않음
+      const r: Picks = {};
       Object.entries(mine.picks).forEach(([gid, mid]) => {
-        if (validGroupIds.has(gid) && memberMap[mid]?.groupId === gid) restored[gid] = mid;
+        if (validGroupIds.has(gid) && memberMap[mid]?.groupId === gid) r[gid] = mid;
       });
-      setPicks(restored);
-    }
-    setNickname(name);
-    setIsLoggedIn(true);
-  };
+      return r;
+    });
+  }, [uid, roomUsers, agencies, validGroupIds, memberMap]);
 
+  const trimmedName = nickname.trim();
+
+  // ── 핸들러
   const handlePick = (groupId: string, member: Member) => {
     setPicks((prev) => ({ ...prev, [groupId]: member.id }));
   };
 
-  const handleSubmit = async () => {
-    if (!uid || submitting) return;
+  const requireComplete = () => {
     if (pickedCount < totalGroups) {
-      return alert(`${totalGroups}명을 모두 골라주세요. (현재 ${pickedCount}명)`);
+      alert(`${totalGroups}명을 모두 골라주세요. (현재 ${pickedCount}명)`);
+      return false;
+    }
+    return true;
+  };
+
+  // 내 선택 이미지 저장 (서버를 거치지 않음 · 닉네임은 선택 사항)
+  const savePersonalImage = async () => {
+    if (!requireComplete()) return;
+    const target = personalRef.current;
+    if (!target) return;
+    try {
+      await captureToPng(target, `${safeFileName(trimmedName || "my")}_picks.png`);
+    } catch (err) {
+      console.error("이미지 저장 에러:", err);
+      alert("이미지 저장에 실패했습니다.");
+    }
+  };
+
+  // 공유 링크 만들기 / 방에 제출 (닉네임 필수)
+  const handleSubmit = async () => {
+    if (submitting) return;
+    if (!requireComplete()) return;
+    if (!trimmedName) {
+      alert("공유하려면 닉네임을 입력해주세요.");
+      nicknameRef.current?.focus();
+      return;
+    }
+    if (!uid) {
+      alert("서버에 연결 중이거나 연결에 실패했습니다. 잠시 후 다시 시도해주세요.");
+      return;
     }
 
     setSubmitting(true);
@@ -432,7 +480,7 @@ export default function App() {
 
       // 문서 id = 내 uid → 내 데이터만 쓸 수 있고, 닉네임이 같아도 서로 다른 문서로 저장됨
       await setDoc(doc(db, "rooms", rid, "users", uid), {
-        nickname,
+        nickname: trimmedName,
         picks: cleanPicks,
         joinedAt: roomUsers[uid]?.joinedAt ?? Date.now()
       });
@@ -441,6 +489,7 @@ export default function App() {
         window.history.replaceState({}, "", `?room=${rid}`);
         setRoomId(rid);
       }
+      setNickname(trimmedName);
       setShowResult(true);
     } catch (err) {
       console.error("제출 에러:", err);
@@ -472,85 +521,48 @@ export default function App() {
     }
   };
 
-  const downloadImage = async () => {
-    const target = captureRef.current;
+  const saveBoardImage = async () => {
+    const target = boardRef.current;
     if (!target) return;
-    const originalOverflow = target.style.overflow;
-    const originalWidth = target.style.width;
-    target.style.overflow = "visible";
-    target.style.width = `${target.scrollWidth}px`;
     try {
-      const canvas = await html2canvas(target, {
-        useCORS: true,
-        scale: 2,
-        backgroundColor: "#ffffff"
-      });
-      const link = document.createElement("a");
-      link.download = "multi_picks.png";
-      link.href = canvas.toDataURL("image/png");
-      link.click();
+      await captureToPng(target, "multi_picks.png", true);
     } catch (err) {
       console.error("이미지 저장 에러:", err);
       alert("이미지 저장에 실패했습니다.");
-    } finally {
-      target.style.overflow = originalOverflow;
-      target.style.width = originalWidth;
     }
   };
 
   // ── 화면
-  if (authError) {
-    return (
-      <div className="App notice-page">
-        <h2>접속할 수 없습니다</h2>
-        <p>인증 서버에 연결하지 못했습니다. 잠시 후 새로고침 해주세요.</p>
-      </div>
-    );
-  }
-  if (agencies.length === 0 || !uid) return <div className="App notice-page">데이터 불러오는 중...</div>;
+  if (agencies.length === 0) return <div className="App notice-page">데이터 불러오는 중...</div>;
 
-  if (!isLoggedIn) {
-    const ready = roomLoaded;
-    return (
-      <div className="App" style={{ textAlign: "center", marginTop: "100px" }}>
-        <h1>{roomId ? "친구의 픽 목록에 참여하기" : "멀티 픽 방 만들기"}</h1>
-        <form onSubmit={handleLogin}>
-          <input
-            type="text"
-            value={nickname}
-            maxLength={MAX_NICKNAME_LENGTH}
-            onChange={(e) => setNickname(e.target.value)}
-            placeholder="사용할 닉네임 입력"
-            autoFocus
-            style={{ padding: "10px", fontSize: "1rem", marginRight: "10px" }}
-          />
-          <button type="submit" disabled={!ready} style={{ padding: "10px 20px", fontSize: "1rem" }}>
-            {ready ? "입장" : "방 불러오는 중..."}
-          </button>
-        </form>
-        {roomError && (
-          <p className="notice">방 정보를 불러오지 못했습니다. 링크가 올바른지 확인해주세요.</p>
-        )}
-        {roomId && roomLoaded && !roomError && displayUsers.length === 0 && (
-          <p className="notice">아직 참여자가 없는 방입니다. 제출하면 이 링크로 방이 열립니다.</p>
-        )}
-        {roomUsers[uid] && (
-          <p className="notice">이 기기로 참여한 기록이 있어 닉네임을 불러왔어요.</p>
-        )}
-      </div>
-    );
-  }
+  const myResultExists = !!uid && !!roomUsers[uid];
 
   return (
     <div className="App">
       {!showResult ? (
         <>
-          <h1>
-            {nickname}님의 최애 {totalGroups}명 고르기
-          </h1>
+          <h1>최애 {totalGroups}명 고르기</h1>
           <p className="progress">
             {pickedCount} / {totalGroups}
           </p>
+
+          {roomId && (
+            <div className="room-banner">
+              <span>
+                {roomError
+                  ? "방 정보를 불러오지 못했습니다. 링크를 확인해주세요."
+                  : roomLoaded
+                  ? `공유된 방에 참여 중 · 참여자 ${displayUsers.length}명`
+                  : "방 정보를 불러오는 중..."}
+              </span>
+              {displayUsers.length > 0 && (
+                <button type="button" onClick={() => setShowResult(true)}>
+                  다른 사람 결과 보기
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="agency-list">
             {agencies.map((agency) => (
               <div key={agency.id} className="agency-container">
@@ -589,9 +601,76 @@ export default function App() {
               </div>
             ))}
           </div>
-          <button className="download-btn" onClick={handleSubmit} disabled={submitting}>
-            {submitting ? "저장 중..." : "선택 완료 및 결과 보기"}
-          </button>
+
+          {/* 내 선택 미리보기 + 저장/공유 */}
+          <section className="finish-section">
+            <h2 className="finish-title">내 선택</h2>
+            <div className="personal-wrap">
+              <div ref={personalRef} className="personal-card">
+                <h3 className="personal-title">
+                  {trimmedName ? `${trimmedName}의 선택` : "나의 선택"}
+                </h3>
+                <div className="personal-grid">
+                  {agencies.map((agency) => (
+                    <div key={agency.id} className="personal-agency">
+                      <img src={agency.logo} alt={agency.name} className="personal-agency-logo" />
+                      <div className="personal-picks">
+                        {agency.groups.map((g) => {
+                          const m = memberMap[picks[g.id]];
+                          const pick = m && m.groupId === g.id ? m : undefined;
+                          return (
+                            <div key={g.id} className="personal-pick">
+                              <div className="slot">
+                                {pick ? (
+                                  <img src={pick.img} alt={pick.name} onError={onImgError(pick.fallback)} />
+                                ) : (
+                                  "?"
+                                )}
+                              </div>
+                              <div className="pick-name">{pick ? pick.name : "\u00A0"}</div>
+                              <div className="pick-unit">{g.name}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="nickname-row">
+              <label htmlFor="nickname">닉네임</label>
+              <input
+                id="nickname"
+                ref={nicknameRef}
+                type="text"
+                value={nickname}
+                maxLength={MAX_NICKNAME_LENGTH}
+                onChange={(e) => setNickname(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur();
+                }}
+                placeholder="예: 하루"
+              />
+            </div>
+            <p className="hint">
+              닉네임을 쓰면 이미지에 “닉네임의 선택”으로 들어가요. 이미지 저장은 비워둬도 되고,
+              공유 링크를 만들 때는 꼭 필요해요.
+            </p>
+
+            <div className="finish-buttons">
+              <button className="download-btn" onClick={savePersonalImage} style={{ backgroundColor: "#20c997" }}>
+                내 선택 이미지 저장
+              </button>
+              <button className="download-btn" onClick={handleSubmit} disabled={submitting}>
+                {submitting ? "저장 중..." : roomId ? "이 방에 제출하기" : "공유 링크 만들기"}
+              </button>
+            </div>
+            {authError && (
+              <p className="hint">서버 연결에 실패해 공유 기능을 쓸 수 없어요. 이미지 저장은 가능합니다.</p>
+            )}
+          </section>
         </>
       ) : (
         <div className="result-view">
@@ -600,14 +679,14 @@ export default function App() {
               공유 링크 복사
             </button>
             <button className="download-btn" onClick={() => setShowResult(false)}>
-              내 픽 수정하기
+              {myResultExists ? "내 픽 수정하기" : "내 픽 고르기"}
             </button>
-            <button className="download-btn" onClick={downloadImage} style={{ backgroundColor: "#20c997" }}>
-              이미지로 저장
+            <button className="download-btn" onClick={saveBoardImage} style={{ backgroundColor: "#20c997" }}>
+              결과표 이미지 저장
             </button>
           </div>
 
-          <div ref={captureRef} className="comparison-board">
+          <div ref={boardRef} className="comparison-board">
             <h2 style={{ textAlign: "center", marginBottom: "30px" }}>참여자별 픽 결과</h2>
 
             <div className="user-compare-row header-row">
@@ -619,7 +698,11 @@ export default function App() {
                     <div className="agency-groups-row">
                       {agency.groups.map((g) => (
                         <div key={`header-${g.id}`} className="compare-slot header-slot">
-                          <img src={g.logo} alt={g.name} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                          <img
+                            src={g.logo}
+                            alt={g.name}
+                            style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                          />
                         </div>
                       ))}
                     </div>

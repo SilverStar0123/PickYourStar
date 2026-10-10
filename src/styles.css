@@ -118,14 +118,16 @@ h1 {
   opacity: 0.6;
   cursor: not-allowed;
 }
-.result-buttons {
+.result-buttons,
+.finish-buttons {
   display: flex;
   justify-content: center;
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 20px;
 }
-.result-buttons .download-btn {
+.result-buttons .download-btn,
+.finish-buttons .download-btn {
   margin: 0;
 }
 
@@ -216,4 +218,138 @@ h1 {
   color: #aaa;
   font-weight: bold;
   border-radius: 8px;
+}
+
+
+/* 방 참여 안내 */
+.room-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: -10px 0 25px;
+  padding: 12px 16px;
+  background: #e7f5ff;
+  border-radius: 12px;
+  color: #1c7ed6;
+  font-size: 0.9rem;
+}
+.room-banner button {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px;
+  background: #4dabf7;
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+/* 선택 완료 영역 (내 선택 카드 + 닉네임 + 버튼) */
+.finish-section {
+  margin-top: 10px;
+}
+.finish-title {
+  text-align: center;
+  font-size: 1.3rem;
+  margin-bottom: 16px;
+}
+.personal-wrap {
+  overflow-x: auto;
+  margin-bottom: 24px;
+}
+.personal-card {
+  width: 560px;
+  margin: 0 auto;
+  padding: 24px;
+  box-sizing: border-box;
+  background: #ffffff;
+  border-radius: 20px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+}
+.personal-title {
+  text-align: center;
+  font-size: 1.3rem;
+  margin: 0 0 18px;
+  color: #333;
+}
+.personal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.personal-agency {
+  background: #f8f9fa;
+  border-radius: 12px;
+  padding: 12px;
+}
+.personal-agency-logo {
+  display: block;
+  height: 28px;
+  max-width: 100%;
+  margin: 0 auto 10px;
+  object-fit: contain;
+}
+.personal-picks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.personal-pick {
+  text-align: center;
+}
+.personal-pick .slot {
+  width: 106px;
+  height: 106px;
+  margin: 0 auto;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #e9ecef;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  color: #adb5bd;
+}
+.personal-pick .slot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pick-name {
+  margin-top: 5px;
+  font-size: 0.75rem;
+  font-weight: bold;
+  line-height: 1.3;
+  color: #444;
+  word-break: keep-all;
+}
+.pick-unit {
+  font-size: 0.65rem;
+  color: #999;
+}
+
+.nickname-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.nickname-row label {
+  font-weight: bold;
+}
+.nickname-row input {
+  padding: 10px;
+  font-size: 1rem;
+  width: 220px;
+  max-width: 60vw;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+}
+.hint {
+  text-align: center;
+  color: #888;
+  font-size: 0.85rem;
+  margin: 0 0 24px;
 }
