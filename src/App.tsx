@@ -14,6 +14,7 @@ import {
 } from "firebase/firestore";
 import "./styles.css";
 import { layoutLogos } from "./logoLayout";
+import { computeMatches } from "./matching";
 import Papa from "papaparse";
 
 // ───────────────────────── Firebase ─────────────────────────
@@ -238,6 +239,29 @@ function balancedMaxWidth(count: number, availWidth: number): number {
 const BOARD_SLOT = 76;
 const BOARD_GAP = 10;
 
+// ── 익명 통계용 ──
+// 닉네임·로그인 id·방 번호는 저장하지 않고, 유닛별로 고른 멤버와 '날짜'만 저장합니다.
+// (제출 시각을 남기면 방 데이터와 시각을 맞춰 누구의 기록인지 추측할 수 있어 날짜까지만 남김)
+// 같은 기기에서 다시 제출하면 같은 문서를 덮어쓰도록, 로그인과 무관한 임의 번호를 이 브라우저에 보관합니다.
+const STATS_ID_KEY = "es_stats_id";
+let memoryStatsId: string | null = null;
+
+function getStatsId(): string {
+  try {
+    const saved = window.localStorage.getItem(STATS_ID_KEY);
+    if (saved && /^[a-z0-9]{16,40}$/.test(saved)) return saved;
+    const fresh = generateRoomId() + generateRoomId();
+    window.localStorage.setItem(STATS_ID_KEY, fresh);
+    return fresh;
+  } catch {
+    // 저장소를 쓸 수 없는 환경(사생활 보호 모드 등)에서는 이번 접속 동안만 유지
+    if (!memoryStatsId) memoryStatsId = generateRoomId() + generateRoomId();
+    return memoryStatsId;
+  }
+}
+
+const todayUtc = () => new Date().toISOString().slice(0, 10);
+
 const safeFileName = (s: string) => s.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40) || "my";
 
 // 화면의 한 영역을 PNG로 저장. expand=true면 가로 스크롤 영역을 전부 펼쳐서 캡처
@@ -290,6 +314,8 @@ export default function App() {
   const listRef = useRef<HTMLDivElement>(null);
   const [listWidth, setListWidth] = useState(0);
   const [logoRatios, setLogoRatios] = useState<Record<string, number>>({});
+  const [showMatch, setShowMatch] = useState(false); // 결과표의 일치율 표시 on/off
+  const [baseChoice, setBaseChoice] = useState<string | null>(null); // 일치율 기준 참여자
 
   // ── 익명 로그인
   useEffect(() => {
@@ -480,6 +506,30 @@ export default function App() {
     });
   }, [roomUsers]);
 
+  // 일치율 기준 참여자: 직접 고른 사람 → 없으면 나 → 없으면 가장 먼저 제출한 사람
+  const baseUserId = useMemo(() => {
+    if (baseChoice && roomUsers[baseChoice]) return baseChoice;
+    if (uid && roomUsers[uid]) return uid;
+    return displayUsers[0]?.id ?? null;
+  }, [baseChoice, uid, roomUsers, displayUsers]);
+
+  const matches = useMemo(() => {
+    if (!baseUserId || !roomUsers[baseUserId]) return null;
+    return computeMatches(roomUsers[baseUserId].picks, roomUsers, Array.from(validGroupIds));
+  }, [baseUserId, roomUsers, validGroupIds]);
+
+  // 기준 참여자를 제외하고 가장 많이 일치한 사람(0개면 없음)
+  const bestMatchCount = useMemo(() => {
+    if (!matches || !baseUserId) return 0;
+    return Object.entries(matches).reduce(
+      (mx, [id, m]) => (id === baseUserId ? mx : Math.max(mx, m.count)),
+      0
+    );
+  }, [matches, baseUserId]);
+
+  const matchOn = showMatch && !!matches && displayUsers.length >= 2;
+  const baseLabel = displayUsers.find((u) => u.id === baseUserId)?.label ?? "";
+
   // 같은 기기로 이 방에 이미 제출한 적이 있으면 닉네임과 픽을 한 번만 복원
   useEffect(() => {
     if (restored.current || !uid || agencies.length === 0) return;
@@ -504,6 +554,18 @@ export default function App() {
     setPicks((prev) => ({ ...prev, [groupId]: member.id }));
   };
 
+  // 완성된 선택을 익명 통계로 보냄 (실패해도 사용자에게는 영향 없음)
+  const sendAnonymousStats = (finalPicks: Picks) => {
+    if (!uid) return; // 인증 전이면 건너뜀
+    const clean: Picks = {};
+    Object.entries(finalPicks).forEach(([g, m]) => {
+      if (validGroupIds.has(g)) clean[g] = m;
+    });
+    setDoc(doc(db, "stats", getStatsId()), { picks: clean, day: todayUtc(), v: 1 }).catch((err) =>
+      console.warn("익명 통계 저장 실패(무시):", err)
+    );
+  };
+
   const requireComplete = () => {
     if (pickedCount < totalGroups) {
       alert(`${totalGroups}명을 모두 골라주세요. (현재 ${pickedCount}명)`);
@@ -517,6 +579,7 @@ export default function App() {
     if (!requireComplete()) return;
     const target = personalRef.current;
     if (!target) return;
+    sendAnonymousStats(picks);
     try {
       await captureToPng(target, `${safeFileName(trimmedName || "my")}_picks.png`);
     } catch (err) {
@@ -558,6 +621,8 @@ export default function App() {
         // 처음 제출할 때만 서버 시간이 기록되고, 수정할 때는 기존 값을 그대로 유지
         joinedAt: roomUsers[uid]?.joinedTs ?? serverTimestamp()
       });
+
+      sendAnonymousStats(cleanPicks);
 
       if (!roomId) {
         window.history.replaceState({}, "", `?room=${rid}`);
@@ -766,6 +831,9 @@ export default function App() {
                 {submitting ? "저장 중..." : roomId ? "이 방에 제출하기" : "공유 링크 만들기"}
               </button>
             </div>
+            <p className="hint">
+              완성한 선택은 닉네임·방 정보 없이 <b>익명 통계</b>에 반영돼요.
+            </p>
             {authError && (
               <p className="hint">서버 연결에 실패해 공유 기능을 쓸 수 없어요. 이미지 저장은 가능합니다.</p>
             )}
@@ -788,12 +856,45 @@ export default function App() {
             </button>
           </div>
 
+          <div className="board-options">
+            <label className={`toggle ${displayUsers.length < 2 ? "disabled" : ""}`}>
+              <input
+                type="checkbox"
+                checked={showMatch}
+                disabled={displayUsers.length < 2}
+                onChange={(e) => setShowMatch(e.target.checked)}
+              />
+              일치율 표시
+            </label>
+            {matchOn && (
+              <label>
+                기준{" "}
+                <select value={baseUserId ?? ""} onChange={(e) => setBaseChoice(e.target.value)}>
+                  {displayUsers.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.label}
+                      {u.id === uid ? " (나)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {displayUsers.length < 2 && (
+              <span className="hint-inline">참여자가 2명 이상이면 사용할 수 있어요</span>
+            )}
+          </div>
+
           <div
             ref={boardRef}
             className="comparison-board"
             style={{ ["--slot" as any]: `${BOARD_SLOT}px`, ["--gap" as any]: `${BOARD_GAP}px` }}
           >
-            <h2 style={{ textAlign: "center", marginBottom: "30px" }}>참여자별 픽 결과</h2>
+            <h2 style={{ textAlign: "center", marginBottom: matchOn ? "6px" : "30px" }}>참여자별 픽 결과</h2>
+            {matchOn && (
+              <p className="match-subtitle">
+                {baseLabel}님 기준 일치율 · 같은 픽은 빨간 테두리
+              </p>
+            )}
 
             <div className="user-compare-row header-row">
               <div className="compare-user-name"></div>
@@ -819,6 +920,7 @@ export default function App() {
                   </div>
                 ))}
               </div>
+              {matchOn && <div className="compare-match match-head">일치율</div>}
             </div>
 
             {displayUsers.map((u) => (
@@ -830,8 +932,10 @@ export default function App() {
                       <div className="agency-groups-row">
                         {agency.groups.map((g) => {
                           const pick = memberMap[u.picks[g.id]];
+                          const basePick = baseUserId ? roomUsers[baseUserId]?.picks[g.id] : undefined;
+                          const same = matchOn && u.id !== baseUserId && !!basePick && basePick === u.picks[g.id];
                           return (
-                            <div key={g.id} className="compare-slot">
+                            <div key={g.id} className={`compare-slot${same ? " matched" : ""}`}>
                               {pick && pick.groupId === g.id ? (
                                 <img src={pick.img} alt={pick.name} onError={onImgError(pick.fallback)} />
                               ) : (
@@ -844,6 +948,28 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+                {matchOn && matches && (
+                  <div
+                    className={`compare-match${
+                      u.id !== baseUserId && bestMatchCount > 0 && matches[u.id]?.count === bestMatchCount
+                        ? " match-best"
+                        : ""
+                    }`}
+                  >
+                    {u.id === baseUserId ? (
+                      <div className="match-base">기준</div>
+                    ) : (
+                      <>
+                        <div className="match-percent">
+                          {Math.round(((matches[u.id]?.count ?? 0) / (matches[u.id]?.total || 1)) * 100)}%
+                        </div>
+                        <div className="match-count">
+                          {matches[u.id]?.count ?? 0}/{matches[u.id]?.total ?? 0}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
