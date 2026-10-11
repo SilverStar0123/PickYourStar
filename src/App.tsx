@@ -61,7 +61,7 @@ interface UserDoc {
   nickname: string;
   picks: Picks;
   joinedAt: number; // 정렬용 (밀리초)
-  joinedTs: Timestamp; // 서버가 기록한 최초 제출 시각 (수정 시 그대로 다시 보냄)
+  joinedTs: Timestamp | null; // 서버가 기록한 최초 제출 시각 (수정 시 그대로 다시 보냄). 예전 방(숫자 형식)이면 null
 }
 type RoomUsers = Record<string, UserDoc>; // key = 기기(익명 로그인) uid
 
@@ -209,7 +209,18 @@ function generateRoomId(): string {
 }
 
 function parseUserDoc(data: DocumentData): UserDoc | null {
-  if (typeof data.nickname !== "string" || !(data.joinedAt instanceof Timestamp)) return null;
+  if (typeof data.nickname !== "string") return null;
+  // 서버 시간(Timestamp) 형식이 기본이고, 서버 시간 도입 전에 만든 방(숫자 형식)도 읽을 수 있게 함
+  let joinedAt: number;
+  let joinedTs: Timestamp | null = null;
+  if (data.joinedAt instanceof Timestamp) {
+    joinedAt = data.joinedAt.toMillis();
+    joinedTs = data.joinedAt;
+  } else if (typeof data.joinedAt === "number") {
+    joinedAt = data.joinedAt;
+  } else {
+    return null;
+  }
   const picks: Picks = {};
   if (data.picks && typeof data.picks === "object") {
     Object.entries(data.picks).forEach(([g, m]) => {
@@ -219,8 +230,8 @@ function parseUserDoc(data: DocumentData): UserDoc | null {
   return {
     nickname: data.nickname.slice(0, MAX_NICKNAME_LENGTH),
     picks,
-    joinedAt: data.joinedAt.toMillis(),
-    joinedTs: data.joinedAt
+    joinedAt,
+    joinedTs
   };
 }
 
@@ -689,6 +700,11 @@ export default function App() {
       alert("방 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.");
       return;
     }
+    // 서버 시간 도입 전에 만든 예전 방의 내 기록은 수정할 수 없음 (보기만 가능)
+    if (uid && roomUsers[uid] && !roomUsers[uid].joinedTs) {
+      alert("이 방은 이전 버전에서 만들어져 내 기록을 수정할 수 없어요. 결과는 볼 수 있고, 수정하려면 '새 방 만들기'로 새로 제출해주세요.");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -1081,14 +1097,18 @@ export default function App() {
           </div>
 
           <div className="board-options">
-            <label className={`toggle ${displayUsers.length < 2 ? "disabled" : ""}`}>
+            <label className={`switch ${displayUsers.length < 2 ? "disabled" : ""}`}>
               <input
                 type="checkbox"
+                role="switch"
                 checked={showMatch}
                 disabled={displayUsers.length < 2}
                 onChange={(e) => setShowMatch(e.target.checked)}
               />
-              일치율 표시
+              <span className="switch-track" aria-hidden="true">
+                <span className="switch-thumb" />
+              </span>
+              <span>일치율 표시</span>
             </label>
             {matchOn && (
               <label>
