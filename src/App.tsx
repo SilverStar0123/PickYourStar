@@ -22,13 +22,13 @@ import Papa from "papaparse";
 // ───────────────────────── Firebase ─────────────────────────
 // (웹 API 키는 공개되어도 되는 값입니다. 실제 보호는 Firestore 규칙이 담당합니다.)
 const firebaseConfig = {
-  apiKey: "AIzaSyC1TjmcvbKHRWkUm1u8isrBzlBNLytXd0o",
-  authDomain: "esmulti-fa048.firebaseapp.com",
-  projectId: "esmulti-fa048",
-  storageBucket: "esmulti-fa048.firebasestorage.app",
-  messagingSenderId: "744801772905",
-  appId: "1:744801772905:web:5afece605dff29a5b1c9f8",
-  measurementId: "G-EJH36NK25P"
+  apiKey: "AIzaSyDaOWDRn8w3PljHAfS0L6j1OQFhT2-uCTw",
+  authDomain: "esmulti2-7c5b3.firebaseapp.com",
+  projectId: "esmulti2-7c5b3",
+  storageBucket: "esmulti2-7c5b3.firebasestorage.app",
+  messagingSenderId: "754594622446",
+  appId: "1:754594622446:web:099c88de0cb58e4f203cff",
+  measurementId: "G-8HLLRXEWGG"
 };
 
 const app = initializeApp(firebaseConfig);
