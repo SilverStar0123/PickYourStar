@@ -900,7 +900,8 @@ export default function App() {
       {!showResult ? (
         <>
           {myRoomsPanel}
-          <h1>최애 {totalGroups}명 고르기</h1>
+          <h1>앙스타 유닛별 취향표</h1>
+          <p className="subtitle">유닛마다 한 명씩, 총 {totalGroups}명을 골라주세요</p>
           <p className="progress">
             {pickedCount} / {totalGroups}
           </p>
@@ -977,7 +978,7 @@ export default function App() {
             <div className="personal-wrap">
               <div ref={personalRef} className="personal-card">
                 <h3 className="personal-title">
-                  {trimmedName ? `${trimmedName}의 선택` : "나의 선택"}
+                  {trimmedName ? `${trimmedName}의 취향표` : "나의 취향표"}
                 </h3>
                 <div className="personal-grid">
                   {agencies.map((agency) => (
@@ -1020,11 +1021,11 @@ export default function App() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur();
                 }}
-                placeholder="예: 보리"
+                placeholder="예: 하루"
               />
             </div>
             <p className="hint">
-              닉네임을 쓰면 이미지에 “닉네임의 선택”으로 들어가요. 이미지 저장은 비워둬도 되고,
+              닉네임을 쓰면 이미지에 “닉네임의 취향표”로 들어가요. 이미지 저장은 비워둬도 되고,
               공유 링크를 만들 때는 꼭 필요해요.
             </p>
 
@@ -1041,7 +1042,7 @@ export default function App() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur();
                     }}
-                    placeholder="예: 우리 모임 최애 모음 (선택)"
+                    placeholder="예: 우리 모임 취향표 (선택)"
                   />
                 </div>
                 <p className="hint">
@@ -1134,7 +1135,7 @@ export default function App() {
             style={{ ["--slot" as any]: `${BOARD_SLOT}px`, ["--gap" as any]: `${BOARD_GAP}px` }}
           >
             <h2 style={{ textAlign: "center", marginBottom: matchOn ? "6px" : "30px" }}>
-              {roomName ? `${roomName}의 결과` : "참여자별 픽 결과"}
+              {roomName ? `${roomName}의 결과` : "참여자별 취향표"}
             </h2>
             {matchOn && (
               <p className="match-subtitle">

@@ -17,11 +17,19 @@ h1 {
   text-align: center;
   margin-bottom: 40px;
 }
+.subtitle {
+  text-align: center;
+  margin: -25px 0 6px;
+  color: #666;
+}
 .progress {
   text-align: center;
   margin-top: -25px;
   margin-bottom: 30px;
   color: #666;
+}
+.subtitle + .progress {
+  margin-top: 0;
 }
 .notice {
   margin-top: 20px;
