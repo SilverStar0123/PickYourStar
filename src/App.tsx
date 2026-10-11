@@ -1020,7 +1020,7 @@ export default function App() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur();
                 }}
-                placeholder="예: 하루"
+                placeholder="예: 보리"
               />
             </div>
             <p className="hint">
