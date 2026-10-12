@@ -1138,6 +1138,12 @@ export default function App() {
     () => Object.keys(picks).filter((g) => validGroupIds.has(g)).length,
     [picks, validGroupIds]
   );
+    // 선택지가 1명뿐인 유닛은 무조건 일치하므로 일치율 계산에서 제외
+  const matchGroupIds = useMemo(() => {
+    const ids = new Set<string>();
+    agencies.forEach((a) => a.groups.forEach((g) => { if (g.members.length > 1) ids.add(g.id); }));
+    return ids;
+  }, [agencies]);
 
   // 소속사별 유닛 로고 크기 (비율이 다른 로고도 눈에 비슷한 크기로 보이게)
   const logoBoxes = useMemo(() => {
@@ -1173,10 +1179,10 @@ export default function App() {
   }, [baseChoice, uid, roomUsers, displayUsers]);
 
   const matches = useMemo(() => {
-    if (!baseUserId || !roomUsers[baseUserId]) return null;
-    return computeMatches(roomUsers[baseUserId].picks, roomUsers, Array.from(validGroupIds));
-  }, [baseUserId, roomUsers, validGroupIds]);
-
+  if (!baseUserId || !roomUsers[baseUserId]) return null;
+  return computeMatches(roomUsers[baseUserId].picks, roomUsers, Array.from(matchGroupIds)); // ← validGroupIds에서 변경
+}, [baseUserId, roomUsers, matchGroupIds]); // ← 의존성도 변경
+  
   // 기준 참여자를 제외하고 가장 많이 일치한 사람(0개면 없음)
   const bestMatchCount = useMemo(() => {
     if (!matches || !baseUserId) return 0;
@@ -1965,7 +1971,7 @@ export default function App() {
                         {agency.groups.map((g) => {
                           const pick = memberMap[u.picks[g.id]];
                           const basePick = baseUserId ? roomUsers[baseUserId]?.picks[g.id] : undefined;
-                          const same = matchOn && u.id !== baseUserId && !!basePick && basePick === u.picks[g.id];
+                          const same = matchOn && u.id !== baseUserId && matchGroupIds.has(g.id) && !!basePick && basePick === u.picks[g.id];
                           return (
                             <div key={g.id} className={`compare-slot${same ? " matched" : ""}`}>
                               {pick && pick.groupId === g.id ? (
