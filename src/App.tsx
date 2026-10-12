@@ -233,6 +233,12 @@ function generateRoomId(): string {
   return Array.from(bytes, (b) => (b % 36).toString(36)).join("");
 }
 
+// 이름을 고친 캐릭터의 옛 id → 현재 id (CSV 이름을 바꿀 때마다 한 줄씩 추가)
+const ID_ALIASES: Record<string, string> = {
+  "Crazy:B::오오카와 코하쿠": "Crazy:B::오우카와 코하쿠",
+  "Crazy:B::오으카와 코하쿠": "Crazy:B::오우카와 코하쿠", // 잘못 입력했던 기간에 저장됐을 수 있는 철자
+};
+
 function parseUserDoc(data: DocumentData): UserDoc | null {
   if (typeof data.nickname !== "string") return null;
   // 서버 시간(Timestamp) 형식이 기본이고, 서버 시간 도입 전에 만든 방(숫자 형식)도 읽을 수 있게 함
@@ -249,7 +255,7 @@ function parseUserDoc(data: DocumentData): UserDoc | null {
   const picks: Picks = {};
   if (data.picks && typeof data.picks === "object") {
     Object.entries(data.picks).forEach(([g, m]) => {
-      if (typeof m === "string") picks[g] = m;
+      if (typeof m === "string") picks[g] = ID_ALIASES[m] ?? m;
     });
   }
   return {
