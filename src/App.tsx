@@ -582,16 +582,19 @@ export default function App() {
 
   // ── 익명 로그인
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      if (user) setUid(user.uid);
-    });
-    signInAnonymously(auth).catch((err) => {
-      console.error("익명 로그인 실패:", err);
-      setAuthError(true);
-    });
-    return unsub;
-  }, []);
-
+  const unsub = onAuthStateChanged(auth, (user) => {
+    if (user) {
+      setUid(user.uid);
+      setAuthError(false);
+    } else {
+      signInAnonymously(auth).catch((err) => {
+        console.error("익명 로그인 실패:", err.code, err.message);
+        setAuthError(true);
+      });
+    }
+  });
+  return unsub;
+}, []);
   // ── CSV 로드 (멤버: ES_list.csv, 유닛 로고: units.csv)
   useEffect(() => {
     let cancelled = false;
