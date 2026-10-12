@@ -566,3 +566,52 @@ h1 {
   font-weight: bold;
   color: #333;
 }
+
+.reset-btn {
+  margin-left: 10px;
+  padding: 3px 10px;
+  background: none;
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  color: #888;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.reset-btn:hover {
+  color: #ff6b6b;
+  border-color: #ff6b6b;
+}
+
+/* 결과표 불러오기 상태 */
+.room-status {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0 0 14px;
+  color: #888;
+  font-size: 0.85rem;
+}
+.room-status .status-note {
+  color: #e8590c;
+}
+.room-status .link-btn {
+  margin-left: 0;
+}
+.room-status .link-btn:disabled {
+  color: #aaa;
+  text-decoration: none;
+  cursor: default;
+}
+
+.link-btn {
+  margin-left: 10px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: #1c7ed6;
+  font-size: 0.85rem;
+  text-decoration: underline;
+  cursor: pointer;
+}

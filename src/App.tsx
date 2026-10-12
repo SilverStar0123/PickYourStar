@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import html2canvas from "html2canvas";
 import { initializeApp } from "firebase/app";
+import type { Firestore } from "firebase/firestore";
 import { getAuth, onAuthStateChanged, signInAnonymously } from "firebase/auth";
 import {
   getFirestore,
@@ -9,7 +10,11 @@ import {
   setDoc,
   updateDoc,
   writeBatch,
-  onSnapshot,
+  getDoc,
+  getDocs,
+  query,
+  orderBy,
+  limit,
   serverTimestamp,
   Timestamp,
   DocumentData
@@ -22,18 +27,25 @@ import Papa from "papaparse";
 // ───────────────────────── Firebase ─────────────────────────
 // (웹 API 키는 공개되어도 되는 값입니다. 실제 보호는 Firestore 규칙이 담당합니다.)
 const firebaseConfig = {
-  apiKey: "AIzaSyDaOWDRn8w3PljHAfS0L6j1OQFhT2-uCTw",
-  authDomain: "esmulti2-7c5b3.firebaseapp.com",
-  projectId: "esmulti2-7c5b3",
-  storageBucket: "esmulti2-7c5b3.firebasestorage.app",
-  messagingSenderId: "754594622446",
-  appId: "1:754594622446:web:099c88de0cb58e4f203cff",
-  measurementId: "G-8HLLRXEWGG"
+  apiKey: "AIzaSyC1TjmcvbKHRWkUm1u8isrBzlBNLytXd0o",
+  authDomain: "esmulti-fa048.firebaseapp.com",
+  projectId: "esmulti-fa048",
+  storageBucket: "esmulti-fa048.firebasestorage.app",
+  messagingSenderId: "744801772905",
+  appId: "1:744801772905:web:5afece605dff29a5b1c9f8",
+  measurementId: "G-EJH36NK25P"
 };
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+
+// 다른 서버를 '읽기 전용'으로 함께 쓰고 싶을 때만 위와 같은 형식의 값을 여기에 채우세요.
+// (예: 서버를 옮긴 뒤에도 예전 방을 계속 보여주고 싶을 때) 지금은 사용하지 않음(null).
+const legacyFirebaseConfig: typeof firebaseConfig | null = null;
+const legacyApp = legacyFirebaseConfig ? initializeApp(legacyFirebaseConfig, "legacy") : null;
+const legacyDb = legacyApp ? getFirestore(legacyApp) : null;
+const legacyAuth = legacyApp ? getAuth(legacyApp) : null;
 
 // ───────────────────────── 타입 ─────────────────────────
 interface Member {
@@ -235,6 +247,120 @@ function parseUserDoc(data: DocumentData): UserDoc | null {
   };
 }
 
+// ───────────────────────── 방 불러오기 (서버 읽기 절약) ─────────────────────────
+// 무료 한도 때문에 실시간 연결 대신 '한 번 읽고 이 기기에 저장'하는 방식을 씀
+const ROOM_CACHE_PREFIX = "es_room_cache:";
+const ROOM_CACHE_INDEX = "es_room_cache_index";
+const ROOM_CACHE_KEEP = 8; // 이 기기에 저장해 둘 최근 방 개수
+const ROOM_CACHE_TTL_MS = 5 * 60 * 1000; // 이 시간 안에 다시 열면 서버를 읽지 않음
+const MAX_USERS_PER_ROOM = 100; // 한 번에 읽어 오는 최대 참여자 수 (먼저 제출한 순)
+
+interface RoomData {
+  source: "main" | "legacy"; // legacy = 이전 서버의 방 (읽기 전용)
+  at: number; // 서버에서 읽어 온 시각
+  name: string;
+  ownerUid: string | null;
+  users: RoomUsers;
+}
+
+function saveRoomCache(rid: string, d: RoomData) {
+  try {
+    const users: Record<string, unknown> = {};
+    Object.entries(d.users).forEach(([id, u]) => {
+      users[id] = {
+        nickname: u.nickname,
+        picks: u.picks,
+        joinedAt: u.joinedAt,
+        ts: u.joinedTs ? [u.joinedTs.seconds, u.joinedTs.nanoseconds] : null
+      };
+    });
+    window.localStorage.setItem(
+      ROOM_CACHE_PREFIX + rid,
+      JSON.stringify({ source: d.source, at: d.at, name: d.name, ownerUid: d.ownerUid, users })
+    );
+    let index: string[] = [];
+    try {
+      index = JSON.parse(window.localStorage.getItem(ROOM_CACHE_INDEX) || "[]");
+    } catch {
+      index = [];
+    }
+    index = [rid, ...index.filter((x) => x !== rid)];
+    index.slice(ROOM_CACHE_KEEP).forEach((old) => window.localStorage.removeItem(ROOM_CACHE_PREFIX + old));
+    window.localStorage.setItem(ROOM_CACHE_INDEX, JSON.stringify(index.slice(0, ROOM_CACHE_KEEP)));
+  } catch {
+    /* 저장 공간이 부족하거나 쓸 수 없으면 캐시만 건너뜀 */
+  }
+}
+
+function loadRoomCache(rid: string): RoomData | null {
+  try {
+    const raw = window.localStorage.getItem(ROOM_CACHE_PREFIX + rid);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (!o || typeof o !== "object" || typeof o.at !== "number") return null;
+    const users: RoomUsers = {};
+    Object.entries(o.users || {}).forEach(([id, v]) => {
+      const u = v as { nickname?: unknown; picks?: unknown; joinedAt?: unknown; ts?: unknown };
+      if (typeof u.nickname !== "string" || typeof u.joinedAt !== "number") return;
+      const picks: Picks = {};
+      if (u.picks && typeof u.picks === "object") {
+        Object.entries(u.picks as Record<string, unknown>).forEach(([g, m]) => {
+          if (typeof m === "string") picks[g] = m;
+        });
+      }
+      const ts = Array.isArray(u.ts) && u.ts.length === 2 ? new Timestamp(u.ts[0], u.ts[1]) : null;
+      users[id] = { nickname: u.nickname, picks, joinedAt: u.joinedAt, joinedTs: ts };
+    });
+    return {
+      source: o.source === "legacy" ? "legacy" : "main",
+      at: o.at,
+      name: typeof o.name === "string" ? o.name : "",
+      ownerUid: typeof o.ownerUid === "string" ? o.ownerUid : null,
+      users
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchRoomFrom(dbx: Firestore, rid: string, source: "main" | "legacy"): Promise<RoomData> {
+  const [meta, snap] = await Promise.all([
+    getDoc(doc(dbx, "rooms", rid)),
+    getDocs(
+      query(collection(dbx, "rooms", rid, "users"), orderBy("joinedAt"), limit(MAX_USERS_PER_ROOM))
+    )
+  ]);
+  const users: RoomUsers = {};
+  snap.forEach((d) => {
+    const parsed = parseUserDoc(d.data({ serverTimestamps: "estimate" }));
+    if (parsed) users[d.id] = parsed;
+  });
+  const md = meta.exists() ? meta.data() : null;
+  return {
+    source,
+    at: Date.now(),
+    name: md && typeof md.name === "string" ? md.name : "",
+    ownerUid: md && typeof md.ownerUid === "string" ? md.ownerUid : null,
+    users
+  };
+}
+
+async function fetchRoom(rid: string): Promise<RoomData> {
+  const main = await fetchRoomFrom(db, rid, "main");
+  if (Object.keys(main.users).length > 0) return main;
+  // 새 서버에 없는 방이면 이전 서버(읽기 전용)에서 찾아봄 (이전 서버를 설정한 경우에만)
+  if (!legacyDb || !legacyAuth) return main;
+  try {
+    await legacyAuth.authStateReady();
+    if (!legacyAuth.currentUser) await signInAnonymously(legacyAuth);
+    const legacy = await fetchRoomFrom(legacyDb, rid, "legacy");
+    if (Object.keys(legacy.users).length > 0) return legacy;
+  } catch (err) {
+    console.warn("이전 서버 조회 실패:", err);
+  }
+  return main;
+}
+
 // ───────────────────────── 앱 ─────────────────────────
 // 선택 화면 멤버 한 칸 크기(CSS의 .member-wrapper 너비, .members 간격과 맞출 것)
 const ITEM_W = 84;
@@ -275,6 +401,25 @@ function getStatsId(): string {
 }
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
+
+// 무료 한도(쓰기)를 아끼기 위해 일부 기기만 통계를 보냄 (기기마다 한 번 정해서 계속 유지)
+// 0 = 통계 끔, 1 = 모든 기기 (한도에 여유가 생기면 올리면 됨)
+const STATS_SAMPLE_RATE = 0.1;
+const STATS_SAMPLE_KEY = "es_stats_sample";
+
+function shouldSendStats(): boolean {
+  if (STATS_SAMPLE_RATE <= 0) return false;
+  if (STATS_SAMPLE_RATE >= 1) return true;
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(STATS_SAMPLE_KEY) || "null");
+    if (saved && saved.rate === STATS_SAMPLE_RATE && typeof saved.yes === "boolean") return saved.yes;
+    const yes = Math.random() < STATS_SAMPLE_RATE;
+    window.localStorage.setItem(STATS_SAMPLE_KEY, JSON.stringify({ rate: STATS_SAMPLE_RATE, yes }));
+    return yes;
+  } catch {
+    return Math.random() < STATS_SAMPLE_RATE;
+  }
+}
 
 // ── 내가 참여한 방 목록 (이 브라우저에만 저장, 로그인 불필요) ──
 interface MyRoom {
@@ -321,6 +466,43 @@ function saveMyRooms(list: MyRoom[]) {
   }
 }
 
+// ── 내 선택·닉네임을 이 기기에 저장 (서버 연결 없이도 새로고침/재방문 후 유지) ──
+const PICKS_KEY = "es_my_picks";
+const NICK_KEY = "es_my_nickname";
+
+function loadLocalPicks(): Picks {
+  try {
+    const raw = window.localStorage.getItem(PICKS_KEY);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    const out: Picks = {};
+    if (obj && typeof obj === "object") {
+      Object.entries(obj).forEach(([g, m]) => {
+        if (typeof m === "string") out[g] = m;
+      });
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function loadLocalNickname(): string {
+  try {
+    return (window.localStorage.getItem(NICK_KEY) || "").slice(0, MAX_NICKNAME_LENGTH);
+  } catch {
+    return "";
+  }
+}
+
+function saveLocal(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    /* 저장소를 못 쓰는 환경이면 이번 접속에서만 유지 */
+  }
+}
+
 const formatDate = (ms: number) => new Date(ms).toLocaleDateString("ko-KR");
 
 const safeFileName = (s: string) => s.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40) || "my";
@@ -356,8 +538,8 @@ export default function App() {
   const [uid, setUid] = useState<string | null>(null);
   const [authError, setAuthError] = useState(false);
 
-  const [nickname, setNickname] = useState("");
-  const [picks, setPicks] = useState<Picks>({});
+  const [nickname, setNickname] = useState(() => loadLocalNickname());
+  const [picks, setPicks] = useState<Picks>(() => loadLocalPicks());
 
   const [roomId, setRoomId] = useState<string | null>(() => parseRoomId());
   const [roomUsers, setRoomUsers] = useState<RoomUsers>({});
@@ -379,6 +561,13 @@ export default function App() {
   const [roomName, setRoomName] = useState(""); // 현재 방의 이름 (서버)
   const [roomOwner, setRoomOwner] = useState<string | null>(null); // 현재 방을 만든 사람의 uid
   const [roomMetaLoaded, setRoomMetaLoaded] = useState(false);
+  const [roomSource, setRoomSource] = useState<"main" | "legacy">("main"); // legacy = 이전 서버(읽기 전용)
+  const [roomFetchedAt, setRoomFetchedAt] = useState<number | null>(null);
+  const [roomLoading, setRoomLoading] = useState(false);
+  const [roomStale, setRoomStale] = useState(false); // 서버를 못 읽어서 저장된 결과를 보여주는 중
+  const [roomRefreshTick, setRoomRefreshTick] = useState(0);
+  const forceRefresh = useRef(false);
+  const roomReq = useRef(0);
   const [roomNameInput, setRoomNameInput] = useState(""); // 새 방을 만들 때 입력하는 이름
   const [showMatch, setShowMatch] = useState(false); // 결과표의 일치율 표시 on/off
   const [baseChoice, setBaseChoice] = useState<string | null>(null); // 일치율 기준 참여자
@@ -475,22 +664,6 @@ export default function App() {
     };
   }, []);
 
-  // ── 방 정보(이름, 만든 사람) 구독: rooms/{roomId}
-  useEffect(() => {
-    if (!roomId || !uid) return;
-    const unsub = onSnapshot(
-      doc(db, "rooms", roomId),
-      (snap) => {
-        const d = snap.exists() ? snap.data() : null;
-        setRoomName(d && typeof d.name === "string" ? d.name : "");
-        setRoomOwner(d && typeof d.ownerUid === "string" ? d.ownerUid : null);
-        setRoomMetaLoaded(true);
-      },
-      (err) => console.warn("방 정보 구독 에러:", err)
-    );
-    return () => unsub();
-  }, [roomId, uid]);
-
   // 방 이름이 바뀌면 '내가 참여한 방' 목록의 이름도 맞춰 둠
   useEffect(() => {
     if (!roomId || !roomMetaLoaded) return;
@@ -504,29 +677,70 @@ export default function App() {
     });
   }, [roomId, roomName, roomMetaLoaded]);
 
-  // ── 방 실시간 구독: rooms/{roomId}/users/{uid}
+  // ── 방 불러오기: 이 기기에 저장된 결과가 있으면 먼저 보여주고, 오래됐을 때만 서버를 읽음
   useEffect(() => {
-    if (!roomId || !uid) return;
-    const unsub = onSnapshot(
-      collection(db, "rooms", roomId, "users"),
-      (snap) => {
-        const users: RoomUsers = {};
-        snap.forEach((d) => {
-          const parsed = parseUserDoc(d.data({ serverTimestamps: "estimate" }));
-          if (parsed) users[d.id] = parsed;
-        });
-        setRoomUsers(users);
-        setRoomError(false);
-        setRoomLoaded(true);
-      },
-      (err) => {
-        console.error("방 구독 에러:", err);
-        setRoomError(true);
-        setRoomLoaded(true);
+    if (!roomId) return;
+    const myReq = ++roomReq.current;
+    const isLatest = () => roomReq.current === myReq;
+    const force = forceRefresh.current;
+    forceRefresh.current = false;
+
+    const apply = (d: RoomData) => {
+      setRoomUsers(d.users);
+      setRoomName(d.name);
+      setRoomOwner(d.ownerUid);
+      setRoomSource(d.source);
+      setRoomFetchedAt(d.at);
+      setRoomMetaLoaded(true);
+      setRoomError(false);
+      setRoomLoaded(true);
+    };
+
+    (async () => {
+      const cached = loadRoomCache(roomId);
+      if (cached) apply(cached);
+      if (!uid) {
+        // 아직 로그인 전이거나 서버에 연결할 수 없는 상태: 저장된 결과가 있으면 그걸로 보여줌
+        if (authError) {
+          if (cached) setRoomStale(true);
+          else setRoomError(true);
+          setRoomLoaded(true);
+        }
+        return;
       }
-    );
-    return () => unsub();
-  }, [roomId, uid]);
+      if (cached && !force && Date.now() - cached.at < ROOM_CACHE_TTL_MS) {
+        setRoomStale(false);
+        setRoomLoading(false);
+        return; // 방금 본 방이면 서버를 읽지 않음
+      }
+      setRoomLoading(true);
+      try {
+        const fresh = await fetchRoom(roomId);
+        if (!isLatest()) return;
+        apply(fresh);
+        setRoomStale(false);
+        if (Object.keys(fresh.users).length > 0) saveRoomCache(roomId, fresh);
+      } catch (err) {
+        if (!isLatest()) return;
+        console.warn("방 불러오기 실패:", err);
+        if (cached) {
+          setRoomStale(true); // 저장된 결과를 대신 보여줌
+        } else {
+          setRoomError(true);
+        }
+        setRoomLoaded(true);
+      } finally {
+        if (isLatest()) setRoomLoading(false);
+      }
+    })();
+  }, [roomId, uid, authError, roomRefreshTick]);
+
+  // 결과표를 서버에서 다시 읽기 (실시간 연결 대신 사용)
+  const refreshRoom = () => {
+    if (!roomId || roomLoading) return;
+    forceRefresh.current = true;
+    setRoomRefreshTick((t) => t + 1);
+  };
 
   // 선택 화면 폭을 측정해서 멤버 줄바꿈을 균형 있게 계산
   useEffect(() => {
@@ -625,6 +839,28 @@ export default function App() {
   const matchOn = showMatch && !!matches && displayUsers.length >= 2;
   const baseLabel = displayUsers.find((u) => u.id === baseUserId)?.label ?? "";
 
+  // 내 선택/닉네임이 바뀔 때마다 이 기기에 저장
+  useEffect(() => {
+    saveLocal(PICKS_KEY, JSON.stringify(picks));
+  }, [picks]);
+  useEffect(() => {
+    saveLocal(NICK_KEY, nickname);
+  }, [nickname]);
+
+  // CSV가 바뀌어 없어진 멤버/유닛이 저장돼 있으면 정리
+  useEffect(() => {
+    if (agencies.length === 0) return;
+    setPicks((cur) => {
+      const next: Picks = {};
+      let changed = false;
+      Object.entries(cur).forEach(([g, m]) => {
+        if (validGroupIds.has(g) && memberMap[m]?.groupId === g) next[g] = m;
+        else changed = true;
+      });
+      return changed ? next : cur;
+    });
+  }, [agencies, validGroupIds, memberMap]);
+
   // 같은 기기로 이 방에 이미 제출한 적이 있으면 닉네임과 픽을 한 번만 복원
   useEffect(() => {
     if (restored.current || !uid || agencies.length === 0) return;
@@ -656,9 +892,17 @@ export default function App() {
     Object.entries(finalPicks).forEach(([g, m]) => {
       if (validGroupIds.has(g)) clean[g] = m;
     });
-    setDoc(doc(db, "stats", getStatsId()), { picks: clean, day: todayUtc(), v: 1 }).catch((err) =>
-      console.warn("익명 통계 저장 실패(무시):", err)
-    );
+    if (!shouldSendStats()) return;
+    // 마지막으로 보낸 내용과 같으면 건너뜀 (이미지를 여러 번 저장해도 서버 쓰기는 한 번)
+    const signature = JSON.stringify(Object.keys(clean).sort().map((k) => [k, clean[k]]));
+    try {
+      if (window.localStorage.getItem("es_stats_sig") === signature) return;
+    } catch {
+      /* 무시 */
+    }
+    setDoc(doc(db, "stats", getStatsId()), { picks: clean, day: todayUtc(), v: 1 })
+      .then(() => saveLocal("es_stats_sig", signature))
+      .catch((err) => console.warn("익명 통계 저장 실패(무시):", err));
   };
 
   const requireComplete = () => {
@@ -698,6 +942,10 @@ export default function App() {
     }
     if (roomId && !roomLoaded) {
       alert("방 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.");
+      return;
+    }
+    if (roomId && roomSource === "legacy") {
+      alert("이전 서버에서 만든 방이라 보기만 가능해요. 새로 제출하려면 '새 방 만들기'를 눌러주세요.");
       return;
     }
     // 서버 시간 도입 전에 만든 예전 방의 내 기록은 수정할 수 없음 (보기만 가능)
@@ -749,15 +997,23 @@ export default function App() {
       setMyRooms(nextRooms);
       saveMyRooms(nextRooms);
 
+      // 내가 제출한 내용을 반영해서 결과를 서버에서 한 번 다시 읽음
+      forceRefresh.current = true;
       if (!roomId) {
         window.history.replaceState({}, "", `?room=${rid}`);
         setRoomId(rid);
+      } else {
+        setRoomRefreshTick((t) => t + 1);
       }
       setNickname(trimmedName);
       setShowResult(true);
     } catch (err) {
       console.error("제출 에러:", err);
-      alert("저장 중 오류가 발생했습니다. 네트워크 상태를 확인한 뒤 다시 시도해주세요.");
+      if ((err as { code?: string })?.code === "resource-exhausted") {
+        alert("오늘 서버 사용량이 한도에 도달해서 공유할 수 없어요. 내일 다시 시도해주세요. (내 선택 이미지 저장은 계속 가능해요)");
+      } else {
+        alert("저장 중 오류가 발생했습니다. 네트워크 상태를 확인한 뒤 다시 시도해주세요.");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -797,6 +1053,9 @@ export default function App() {
     setRoomName("");
     setRoomOwner(null);
     setRoomMetaLoaded(false);
+    setRoomSource("main");
+    setRoomFetchedAt(null);
+    setRoomStale(false);
     setRoomNameInput("");
     setRoomError(false);
     setRoomLoaded(true);
@@ -818,6 +1077,9 @@ export default function App() {
     setRoomName("");
     setRoomOwner(null);
     setRoomMetaLoaded(false);
+    setRoomSource("main");
+    setRoomFetchedAt(null);
+    setRoomStale(false);
     setRoomError(false);
     setRoomLoaded(false);
     setRoomId(id);
@@ -904,15 +1166,28 @@ export default function App() {
           <p className="subtitle">유닛마다 한 명씩, 총 {totalGroups}명을 골라주세요</p>
           <p className="progress">
             {pickedCount} / {totalGroups}
+            {pickedCount > 0 && (
+              <button
+                type="button"
+                className="reset-btn"
+                onClick={() => {
+                  if (window.confirm("고른 선택을 모두 지우고 처음부터 다시 할까요?")) setPicks({});
+                }}
+              >
+                초기화
+              </button>
+            )}
           </p>
 
           {roomId && (
             <div className="room-banner">
               <span>
                 {roomError
-                  ? "방 정보를 불러오지 못했습니다. 링크를 확인해주세요."
+                  ? "방 정보를 불러오지 못했습니다. 링크가 틀렸거나 서버 사용량 한도일 수 있어요."
                   : roomLoaded
-                  ? `공유된 방에 참여 중${roomName ? ` · ${roomName}` : ""} · 참여자 ${displayUsers.length}명`
+                  ? `${roomSource === "legacy" ? "이전 서버의 방(보기 전용)" : "공유된 방에 참여 중"}${
+                      roomName ? ` · ${roomName}` : ""
+                    } · 참여자 ${displayUsers.length}명`
                   : "방 정보를 불러오는 중..."}
               </span>
               {displayUsers.length > 0 && (
@@ -1021,7 +1296,7 @@ export default function App() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur();
                 }}
-                placeholder="예: 보리"
+                placeholder="예: 하루"
               />
             </div>
             <p className="hint">
@@ -1061,7 +1336,7 @@ export default function App() {
               </button>
             </div>
             <p className="hint">
-              완성한 선택은 닉네임·방 정보 없이 <b>익명 통계</b>에 반영돼요.
+              완성한 선택은 닉네임·방 정보 없이 <b>익명 통계</b>에 반영될 수 있어요.
             </p>
             {authError && (
               <p className="hint">서버 연결에 실패해 공유 기능을 쓸 수 없어요. 이미지 저장은 가능합니다.</p>
@@ -1074,7 +1349,7 @@ export default function App() {
           {!roomLoaded && <p className="hint-inline" style={{ textAlign: "center" }}>방 정보를 불러오는 중...</p>}
           {roomError && (
             <p className="hint-inline" style={{ textAlign: "center" }}>
-              방 정보를 불러오지 못했습니다. 링크를 확인해주세요.
+              방 정보를 불러오지 못했습니다. 링크가 틀렸거나 서버 사용량 한도일 수 있어요.
             </p>
           )}
           <div className="result-buttons">
@@ -1094,6 +1369,24 @@ export default function App() {
               <button className="download-btn" onClick={renameRoom} style={{ backgroundColor: "#845ef7" }}>
                 방 이름 수정
               </button>
+            )}
+          </div>
+
+          <div className="room-status">
+            {roomFetchedAt && (
+              <span>
+                {new Date(roomFetchedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}에 불러온 결과
+              </span>
+            )}
+            <button type="button" className="link-btn" onClick={refreshRoom} disabled={roomLoading}>
+              {roomLoading ? "불러오는 중..." : "새로고침"}
+            </button>
+            {roomSource === "legacy" && <span className="status-note">이전 서버의 방이라 보기만 가능해요</span>}
+            {roomStale && (
+              <span className="status-note">서버에서 새로 읽지 못해 이 기기에 저장된 결과를 보여주고 있어요</span>
+            )}
+            {displayUsers.length >= MAX_USERS_PER_ROOM && (
+              <span className="status-note">참여자가 많아 먼저 제출한 {MAX_USERS_PER_ROOM}명까지만 보여요</span>
             )}
           </div>
 
