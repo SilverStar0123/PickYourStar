@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import html2canvas from "html2canvas";
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps } from "firebase/app";
 import type { Firestore } from "firebase/firestore";
 import { getAuth, onAuthStateChanged, signInAnonymously } from "firebase/auth";
 import {
@@ -26,7 +26,36 @@ import { computeMatches } from "./matching";
 import Papa from "papaparse";
 
 // ───────────────────────── Firebase ─────────────────────────
-// (웹 API 키는 공개되어도 되는 값입니다. 실제 보호는 Firestore 규칙이 담당합니다.)
+const firebaseConfigs: Record<string, typeof firebaseConfig> = {
+  unit:     { apiKey: "AIzaSyC1TjmcvbKHRWkUm1u8isrBzlBNLytXd0o",
+  authDomain: "esmulti-fa048.firebaseapp.com",
+  projectId: "esmulti-fa048",
+  storageBucket: "esmulti-fa048.firebasestorage.app",
+  messagingSenderId: "744801772905",
+  appId: "1:744801772905:web:5afece605dff29a5b1c9f8",
+  measurementId: "G-EJH36NK25P" },
+  
+  shuffle1: { apiKey: "AIzaSyDaOWDRn8w3PljHAfS0L6j1OQFhT2-uCTw",
+  authDomain: "esmulti2-7c5b3.firebaseapp.com",
+  databaseURL: "https://esmulti2-7c5b3-default-rtdb.firebaseio.com",
+  projectId: "esmulti2-7c5b3",
+  storageBucket: "esmulti2-7c5b3.firebasestorage.app",
+  messagingSenderId: "754594622446",
+  appId: "1:754594622446:web:099c88de0cb58e4f203cff",
+  measurementId: "G-8HLLRXEWGG" },
+  
+};
+
+function getFirebase(mode: string) {
+  const cfg = firebaseConfigs[mode] ?? firebaseConfigs.unit;
+  const name = mode === "unit" ? "[DEFAULT]" : mode;   // unit은 기존 기본 앱 그대로
+  const app =
+    getApps().find((a) => a.name === name) ??
+    (mode === "unit" ? initializeApp(cfg) : initializeApp(cfg, name));
+  return { db: getFirestore(app), auth: getAuth(app) };
+}
+
+
 const firebaseConfig = {
   apiKey: "AIzaSyC1TjmcvbKHRWkUm1u8isrBzlBNLytXd0o",
   authDomain: "esmulti-fa048.firebaseapp.com",
@@ -348,20 +377,8 @@ async function fetchRoomFrom(dbx: Firestore, rid: string, source: "main" | "lega
   };
 }
 
-async function fetchRoom(rid: string): Promise<RoomData> {
-  const main = await fetchRoomFrom(db, rid, "main");
-  if (Object.keys(main.users).length > 0) return main;
-  // 새 서버에 없는 방이면 이전 서버(읽기 전용)에서 찾아봄 (이전 서버를 설정한 경우에만)
-  if (!legacyDb || !legacyAuth) return main;
-  try {
-    await legacyAuth.authStateReady();
-    if (!legacyAuth.currentUser) await signInAnonymously(legacyAuth);
-    const legacy = await fetchRoomFrom(legacyDb, rid, "legacy");
-    if (Object.keys(legacy.users).length > 0) return legacy;
-  } catch (err) {
-    console.warn("이전 서버 조회 실패:", err);
-  }
-  return main;
+async function fetchRoom(db: Firestore, rid: string): Promise<RoomData> {
+  return fetchRoomFrom(db, rid, "main");   // legacy를 안 쓰면 이렇게 단순해져요
 }
 
 // ───────────────────────── 앱 ─────────────────────────
@@ -848,7 +865,9 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-export default function App() {
+export default function App({ mode }: { mode: string }) {
+  const { db, auth } = useMemo(() => getFirebase(mode), [mode]);
+  
   // 인증(익명) — 공유(저장)할 때만 필요합니다. 실패해도 선택/이미지 저장은 가능
   const [uid, setUid] = useState<string | null>(null);
   const [authError, setAuthError] = useState(false);
