@@ -593,6 +593,236 @@ async function renderToBlob(target: HTMLElement, expand: boolean): Promise<Blob>
   }
 }
 
+// ── 개인 취향표 이미지: html2canvas 없이 캔버스에 직접 그림 (모바일/앱 안 브라우저에서도 안정적) ──
+function loadImage(src: string, fallback?: string): Promise<HTMLImageElement | null> {
+  const tryLoad = (u: string) =>
+    new Promise<HTMLImageElement | null>((resolve) => {
+      const im = new Image();
+      const timer = setTimeout(() => resolve(null), 8000);
+      im.onload = () => {
+        clearTimeout(timer);
+        resolve(im);
+      };
+      im.onerror = () => {
+        clearTimeout(timer);
+        resolve(null);
+      };
+      if (!/^data:/i.test(u)) im.crossOrigin = "anonymous";
+      im.src = u;
+    });
+  return tryLoad(src).then((im) => im ?? (fallback ? tryLoad(fallback) : null));
+}
+
+function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+async function renderPersonalBlob(
+  agencies: Agency[],
+  picks: Picks,
+  memberMap: Record<string, Member>,
+  title: string
+): Promise<Blob> {
+  // styles.css의 .personal-card 와 같은 크기/간격 (화면 미리보기와 같은 모양)
+  const W = 560, PAD = 24, GRID_GAP = 14, BOX_PAD = 12, PICK_GAP = 10, SLOT = 106, LOGO_H = 40;
+  const NAME_LH = 15.6, UNIT_H = 13;
+  const boxW = (W - PAD * 2 - GRID_GAP) / 2;
+  const colW = (boxW - BOX_PAD * 2 - PICK_GAP) / 2;
+  const NAME_FONT = "bold 12px sans-serif";
+
+  const probe = document.createElement("canvas").getContext("2d");
+  if (!probe) throw new Error("canvas 미지원");
+  const mctx: CanvasRenderingContext2D = probe;
+  mctx.font = NAME_FONT;
+  const wrap = (text: string, maxW: number): string[] => {
+    const lines: string[] = [];
+    let cur = "";
+    const pushLong = (word: string) => {
+      Array.from(word).forEach((ch) => {
+        if (cur && mctx.measureText(cur + ch).width > maxW) {
+          lines.push(cur);
+          cur = ch;
+        } else cur += ch;
+      });
+    };
+    text
+      .split(" ")
+      .filter(Boolean)
+      .forEach((word) => {
+        const trial = cur ? `${cur} ${word}` : word;
+        if (mctx.measureText(trial).width <= maxW) cur = trial;
+        else if (!cur) pushLong(word);
+        else {
+          lines.push(cur);
+          cur = "";
+          pushLong(word);
+        }
+      });
+    if (cur) lines.push(cur);
+    return lines.length ? lines : [""];
+  };
+
+  // 이미지 미리 불러오기
+  const logos = await Promise.all(agencies.map((a) => loadImage(a.logo)));
+  const pickImgs = await Promise.all(
+    agencies.map((a) =>
+      Promise.all(
+        a.groups.map((g) => {
+          const m = memberMap[picks[g.id]];
+          return m && m.groupId === g.id ? loadImage(m.img, m.fallback) : Promise.resolve(null);
+        })
+      )
+    )
+  );
+
+  // 높이 계산
+  const pickLines = agencies.map((a) =>
+    a.groups.map((g) => {
+      const m = memberMap[picks[g.id]];
+      return m && m.groupId === g.id ? wrap(m.name, colW) : [""];
+    })
+  );
+  const rowHeights = agencies.map((a, ai) => {
+    const rows: number[] = [];
+    a.groups.forEach((_, gi) => {
+      const r = Math.floor(gi / 2);
+      const h = SLOT + 5 + pickLines[ai][gi].length * NAME_LH + UNIT_H;
+      rows[r] = Math.max(rows[r] || 0, h);
+    });
+    return rows;
+  });
+  const boxHeights = rowHeights.map(
+    (rows) => BOX_PAD * 2 + LOGO_H + 10 + rows.reduce((x, y) => x + y, 0) + PICK_GAP * Math.max(0, rows.length - 1)
+  );
+  const gridRows = Math.ceil(agencies.length / 2);
+  const gridRowH: number[] = [];
+  boxHeights.forEach((h, i) => {
+    const r = Math.floor(i / 2);
+    gridRowH[r] = Math.max(gridRowH[r] || 0, h);
+  });
+  const TITLE_H = 24;
+  const H = PAD + TITLE_H + 18 + gridRowH.reduce((x, y) => x + y, 0) + GRID_GAP * Math.max(0, gridRows - 1) + PAD;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(W * IMAGE_SCALE);
+  canvas.height = Math.round(H * IMAGE_SCALE);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas 미지원");
+  ctx.scale(IMAGE_SCALE, IMAGE_SCALE);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  ctx.fillStyle = "#333333";
+  ctx.font = "bold 20.8px sans-serif";
+  ctx.fillText(title, W / 2, PAD + TITLE_H / 2, W - PAD * 2);
+
+  agencies.forEach((agency, ai) => {
+    const col = ai % 2;
+    const gr = Math.floor(ai / 2);
+    const bx = PAD + col * (boxW + GRID_GAP);
+    const by = PAD + TITLE_H + 18 + gridRowH.slice(0, gr).reduce((x, y) => x + y + GRID_GAP, 0);
+
+    ctx.fillStyle = "#f8f9fa";
+    roundRectPath(ctx, bx, by, boxW, gridRowH[gr], 12);
+    ctx.fill();
+
+    // 소속사 로고 (비율 유지, 칸 안에 맞춤)
+    const logo = logos[ai];
+    const innerW = boxW - BOX_PAD * 2;
+    if (logo && logo.naturalWidth && logo.naturalHeight) {
+      const sc = Math.min(LOGO_H / logo.naturalHeight, innerW / logo.naturalWidth);
+      const dw = logo.naturalWidth * sc;
+      const dh = logo.naturalHeight * sc;
+      ctx.drawImage(logo, bx + boxW / 2 - dw / 2, by + BOX_PAD + (LOGO_H - dh) / 2, dw, dh);
+    } else {
+      ctx.fillStyle = "#444444";
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillText(agency.name, bx + boxW / 2, by + BOX_PAD + LOGO_H / 2, innerW);
+    }
+
+    agency.groups.forEach((g, gi) => {
+      const pc = gi % 2;
+      const pr = Math.floor(gi / 2);
+      const cx = bx + BOX_PAD + pc * (colW + PICK_GAP) + colW / 2;
+      const ry =
+        by + BOX_PAD + LOGO_H + 10 + rowHeights[ai].slice(0, pr).reduce((x, y) => x + y + PICK_GAP, 0);
+      const sx = cx - SLOT / 2;
+
+      // 사진 칸 (둥근 모서리, 가운데 기준 정사각형으로 채움)
+      ctx.save();
+      roundRectPath(ctx, sx, ry, SLOT, SLOT, 10);
+      ctx.clip();
+      ctx.fillStyle = "#e9ecef";
+      ctx.fillRect(sx, ry, SLOT, SLOT);
+      const im = pickImgs[ai][gi];
+      if (im && im.naturalWidth && im.naturalHeight) {
+        const side = Math.min(im.naturalWidth, im.naturalHeight);
+        ctx.drawImage(
+          im,
+          (im.naturalWidth - side) / 2,
+          (im.naturalHeight - side) / 2,
+          side,
+          side,
+          sx,
+          ry,
+          SLOT,
+          SLOT
+        );
+      } else {
+        ctx.fillStyle = "#adb5bd";
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillText("?", cx, ry + SLOT / 2);
+      }
+      ctx.restore();
+
+      // 이름 / 유닛
+      const lines = pickLines[ai][gi];
+      ctx.fillStyle = "#444444";
+      ctx.font = NAME_FONT;
+      lines.forEach((ln, k) => ctx.fillText(ln, cx, ry + SLOT + 5 + NAME_LH * (k + 0.5)));
+      ctx.fillStyle = "#999999";
+      ctx.font = "10.4px sans-serif";
+      ctx.fillText(g.name, cx, ry + SLOT + 5 + lines.length * NAME_LH + UNIT_H / 2, colW);
+    });
+  });
+
+  return new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob 실패"))), "image/png")
+  );
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* 아래 방법으로 재시도 */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 function triggerDownload(blob: Blob, filename: string): boolean {
   try {
     const url = URL.createObjectURL(blob);
@@ -635,7 +865,9 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [agencies, setAgencies] = useState<Agency[]>([]);
 
-  const [previewImg, setPreviewImg] = useState<string | null>(null); // 다운로드가 안 되는 환경용 미리보기
+  const [preview, setPreview] = useState<{ src: string; blob: Blob; name: string } | null>(null); // 다운로드가 안 되는 환경용 안내 창
+  const [savingImage, setSavingImage] = useState(false);
+  const transferApplied = useRef(false);
   const [serverBusy, setServerBusy] = useState<boolean>(() => isServerBusyNow());
   const lastSubmitAt = useRef(0);
   const boardRef = useRef<HTMLDivElement>(null);
@@ -751,6 +983,32 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  // 앱 안 브라우저에서 '기본 브라우저로 열기'로 넘어온 경우: 주소에 실린 선택·닉네임을 이어받음
+  useEffect(() => {
+    if (agencies.length === 0 || transferApplied.current) return;
+    transferApplied.current = true;
+    const sp = new URLSearchParams(window.location.search);
+    const code = sp.get("pk");
+    if (code === null) return;
+    const next: Picks = {};
+    let i = 0;
+    agencies.forEach((a) =>
+      a.groups.forEach((g) => {
+        const ch = code.charAt(i++);
+        const idx = ch && ch !== "-" ? parseInt(ch, 36) : NaN;
+        const m = Number.isNaN(idx) ? undefined : g.members[idx];
+        if (m) next[g.id] = m.id;
+      })
+    );
+    if (Object.keys(next).length > 0) setPicks(next);
+    const nk = sp.get("nk");
+    if (nk) setNickname(nk.slice(0, MAX_NICKNAME_LENGTH));
+    sp.delete("pk");
+    sp.delete("nk");
+    const qs = sp.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+  }, [agencies]);
 
   // 방 이름이 바뀌면 '내가 참여한 방' 목록의 이름도 맞춰 둠
   useEffect(() => {
@@ -997,11 +1255,68 @@ export default function App() {
       .catch((err) => console.warn("익명 통계 저장 실패(무시):", err));
   };
 
-  // 이미지를 만들어 저장. 다운로드가 막힌 환경(앱 안 브라우저 등)이면 미리보기 창을 띄움
-  const saveImage = async (target: HTMLElement, filename: string, expand: boolean) => {
-    const blob = await renderToBlob(target, expand);
+  // 만들어진 이미지를 저장. 다운로드가 막힌 환경(앱 안 브라우저 등)이면 안내 창을 띄움
+  const deliverBlob = async (blob: Blob, filename: string) => {
     if (!IN_APP_BROWSER.test(navigator.userAgent) && triggerDownload(blob, filename)) return;
-    setPreviewImg(await blobToDataUrl(blob));
+    setPreview({ src: await blobToDataUrl(blob), blob, name: filename });
+  };
+
+  // 이미지 만들기 → 저장. 만드는 동안 버튼을 잠그고, 너무 오래 걸리면 중단해서 '반응 없음'이 없게 함
+  const runSave = async (make: () => Promise<Blob>, filename: string, timeoutMs: number) => {
+    if (savingImage) return;
+    setSavingImage(true);
+    try {
+      const blob = await withTimeout(make(), timeoutMs);
+      await deliverBlob(blob, filename);
+    } finally {
+      setSavingImage(false);
+    }
+  };
+
+  // 앱 안 브라우저 → 기본 브라우저로 넘길 때, 지금 고른 선택이 이어지도록 주소에 실어 보냄
+  const buildTransferUrl = () => {
+    const code = agencies
+      .flatMap((a) => a.groups)
+      .map((g) => {
+        const idx = g.members.findIndex((m) => m.id === picks[g.id]);
+        return idx >= 0 ? idx.toString(36) : "-";
+      })
+      .join("");
+    const u = new URL(window.location.href);
+    u.hash = "";
+    u.searchParams.set("pk", code);
+    if (trimmedName) u.searchParams.set("nk", trimmedName);
+    return u.toString();
+  };
+
+  const openExternal = () => {
+    const url = buildTransferUrl();
+    const ua = navigator.userAgent;
+    if (/KAKAOTALK/i.test(ua)) {
+      window.location.href = `kakaotalk://web/openExternal?url=${encodeURIComponent(url)}`;
+    } else if (/Android/i.test(ua)) {
+      window.location.href = `intent://${url.replace(/^https?:\/\//, "")}#Intent;scheme=https;package=com.android.chrome;end`;
+    } else {
+      alert("화면 모서리의 ⋯ 메뉴에서 '다른 브라우저로 열기'(또는 'Safari로 열기')를 눌러주세요.\n안 보이면 '주소 복사'를 눌러 Chrome·Safari에 붙여 넣으세요.");
+    }
+  };
+
+  const copyTransferUrl = async () => {
+    const ok = await copyText(buildTransferUrl());
+    alert(
+      ok
+        ? "주소를 복사했어요. Chrome·Safari 주소창에 붙여 넣으면 지금 고른 선택이 그대로 이어져요."
+        : "복사에 실패했습니다."
+    );
+  };
+
+  const sharePreview = async () => {
+    if (!preview) return;
+    try {
+      await navigator.share({ files: [new File([preview.blob], preview.name, { type: "image/png" })] });
+    } catch (err) {
+      if ((err as Error)?.name !== "AbortError") alert("공유 창을 열지 못했어요. 다른 방법을 사용해 주세요.");
+    }
   };
 
   const requireComplete = () => {
@@ -1015,10 +1330,12 @@ export default function App() {
   // 내 선택 이미지 저장 (서버를 거치지 않음 · 닉네임은 선택 사항)
   const savePersonalImage = async () => {
     if (!requireComplete()) return;
-    const target = personalRef.current;
-    if (!target) return;
     try {
-      await saveImage(target, `${safeFileName(trimmedName || "my")}_picks.png`, false);
+      await runSave(
+        () => renderPersonalBlob(agencies, picks, memberMap, trimmedName ? `${trimmedName}의 취향표` : "나의 취향표"),
+        `${safeFileName(trimmedName || "my")}_picks.png`,
+        30000
+      );
     } catch (err) {
       console.error("이미지 저장 에러:", err);
       alert("이미지 저장에 실패했습니다. 잠시 후 다시 시도하거나 Chrome·Safari 같은 기본 브라우저에서 열어주세요.");
@@ -1269,7 +1586,7 @@ export default function App() {
     const target = boardRef.current;
     if (!target) return;
     try {
-      await saveImage(target, "multi_picks.png", true);
+      await runSave(() => renderToBlob(target, true), "multi_picks.png", 60000);
     } catch (err) {
       console.error("이미지 저장 에러:", err);
       alert("이미지 저장에 실패했습니다. 잠시 후 다시 시도하거나 Chrome·Safari 같은 기본 브라우저에서 열어주세요.");
@@ -1486,8 +1803,13 @@ export default function App() {
             )}
 
             <div className="finish-buttons">
-              <button className="download-btn" onClick={savePersonalImage} style={{ backgroundColor: "#20c997" }}>
-                내 선택 이미지 저장
+              <button
+                className="download-btn"
+                onClick={savePersonalImage}
+                disabled={savingImage}
+                style={{ backgroundColor: "#20c997" }}
+              >
+                {savingImage ? "이미지 만드는 중..." : "내 선택 이미지 저장"}
               </button>
               <button className="download-btn" onClick={handleSubmit} disabled={submitting}>
                 {submitting ? "저장 중..." : roomId ? "이 방에 제출하기" : "공유 링크 만들기"}
@@ -1524,8 +1846,13 @@ export default function App() {
             <button className="download-btn" onClick={() => setShowResult(false)}>
               {myResultExists ? "내 픽 수정하기" : "내 픽 고르기"}
             </button>
-            <button className="download-btn" onClick={saveBoardImage} style={{ backgroundColor: "#20c997" }}>
-              결과표 이미지 저장
+            <button
+              className="download-btn"
+              onClick={saveBoardImage}
+              disabled={savingImage}
+              style={{ backgroundColor: "#20c997" }}
+            >
+              {savingImage ? "이미지 만드는 중..." : "결과표 이미지 저장"}
             </button>
             <button className="download-btn" onClick={startNewRoom} style={{ backgroundColor: "#868e96" }}>
               새 방 만들기
@@ -1681,12 +2008,31 @@ export default function App() {
         </div>
       )}
 
-      {previewImg && (
-        <div className="img-preview-overlay" onClick={() => setPreviewImg(null)}>
+      {preview && (
+        <div className="img-preview-overlay" onClick={() => setPreview(null)}>
           <div className="img-preview-box" onClick={(e) => e.stopPropagation()}>
-            <p>이미지를 길게 눌러(PC는 우클릭) 저장하세요</p>
-            <img src={previewImg} alt="저장할 이미지" />
-            <button type="button" className="download-btn" onClick={() => setPreviewImg(null)}>
+            <p className="preview-guide">
+              이 브라우저에서는 이미지를 바로 저장할 수 없어요.
+              <br />
+              아래 방법 중 하나를 사용해 주세요.
+            </p>
+            <div className="preview-actions">
+              {typeof navigator.canShare === "function" &&
+                navigator.canShare({ files: [new File([preview.blob], preview.name, { type: "image/png" })] }) && (
+                  <button type="button" className="download-btn" onClick={sharePreview}>
+                    이미지 저장·공유
+                  </button>
+                )}
+              <button type="button" className="download-btn" onClick={openExternal}>
+                기본 브라우저로 열기
+              </button>
+              <button type="button" className="download-btn" onClick={copyTransferUrl}>
+                주소 복사
+              </button>
+            </div>
+            <img src={preview.src} alt="저장할 이미지" />
+            <p className="preview-sub">이미지를 길게 눌러 저장 메뉴가 나오면 그대로 저장해도 돼요.</p>
+            <button type="button" className="download-btn" onClick={() => setPreview(null)}>
               닫기
             </button>
           </div>

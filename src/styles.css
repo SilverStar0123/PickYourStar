@@ -648,3 +648,20 @@ h1 {
 .busy-note {
   color: #e03131;
 }
+
+.preview-guide {
+  margin: 0 0 10px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.preview-sub {
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+  color: #777;
+}
+.preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
