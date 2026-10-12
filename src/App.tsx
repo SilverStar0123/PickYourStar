@@ -1568,13 +1568,23 @@ export default function App() {
     window.scrollTo({ top: 0 });
   };
 
-  // 방을 만든 사람만 이름 변경 가능 (규칙에서도 막음)
+    // 방을 만든 사람만 이름 변경 가능 (규칙에서도 막음)
   const renameRoom = async () => {
     if (!roomId || !uid || roomOwner !== uid) return;
     const input = window.prompt(`새 방 이름 (최대 ${MAX_ROOM_NAME}자)`, roomName);
     if (input === null) return;
+    const newName = input.trim().slice(0, MAX_ROOM_NAME);
     try {
-      await updateDoc(doc(db, "rooms", roomId), { name: input.trim().slice(0, MAX_ROOM_NAME) });
+      await withTimeout(updateDoc(doc(db, "rooms", roomId), { name: newName }), 12000);
+      // 서버 저장이 끝나면 화면과 이 기기의 저장본에도 바로 반영
+      setRoomName(newName);
+      saveRoomCache(roomId, {
+        source: "main",
+        at: roomFetchedAt ?? Date.now(),
+        name: newName,
+        ownerUid: roomOwner,
+        users: roomUsers
+      });
     } catch (err) {
       console.error("방 이름 변경 에러:", err);
       alert("방 이름을 바꾸지 못했습니다. 방을 만든 사람만 바꿀 수 있어요.");
