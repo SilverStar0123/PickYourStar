@@ -505,6 +505,14 @@ function saveLocal(key: string, value: string) {
 
 const formatDate = (ms: number) => new Date(ms).toLocaleDateString("ko-KR");
 
+// 서버가 응답하지 않을 때 '저장 중...'에서 영원히 멈추지 않도록
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms))
+  ]);
+}
+
 const safeFileName = (s: string) => s.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40) || "my";
 
 // 화면의 한 영역을 PNG로 저장. expand=true면 가로 스크롤 영역을 전부 펼쳐서 캡처
@@ -978,9 +986,9 @@ export default function App() {
         const batch = writeBatch(db);
         batch.set(doc(db, "rooms", rid), { name: newRoomName, ownerUid: uid });
         batch.set(userRef, userData);
-        await batch.commit();
+        await withTimeout(batch.commit(), 12000);
       } else {
-        await setDoc(userRef, userData);
+        await withTimeout(setDoc(userRef, userData), 12000);
       }
 
       sendAnonymousStats(cleanPicks);
@@ -1009,8 +1017,11 @@ export default function App() {
       setShowResult(true);
     } catch (err) {
       console.error("제출 에러:", err);
-      if ((err as { code?: string })?.code === "resource-exhausted") {
-        alert("오늘 서버 사용량이 한도에 도달해서 공유할 수 없어요. 내일 다시 시도해주세요. (내 선택 이미지 저장은 계속 가능해요)");
+      if (
+        (err as { code?: string })?.code === "resource-exhausted" ||
+        (err as Error)?.message === "timeout"
+      ) {
+        alert("지금은 서버에 저장할 수 없어요. 오늘 서버 사용량 한도에 도달했거나 서버 응답이 없는 상태예요. 잠시 후 다시 시도해주세요. (내 선택 이미지 저장은 계속 가능해요)");
       } else {
         alert("저장 중 오류가 발생했습니다. 네트워크 상태를 확인한 뒤 다시 시도해주세요.");
       }
@@ -1296,7 +1307,7 @@ export default function App() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur();
                 }}
-                placeholder="예: 하루"
+                placeholder="예: 보리"
               />
             </div>
             <p className="hint">
