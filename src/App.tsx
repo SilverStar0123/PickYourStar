@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import html2canvas from "html2canvas";
 import { initializeApp } from "firebase/app";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "firebase/app-check";
 import type { Firestore } from "firebase/firestore";
 import { getAuth, onAuthStateChanged, signInAnonymously } from "firebase/auth";
 import {
@@ -38,6 +39,18 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+
+const app = initializeApp(firebaseConfig);
+
+// 로컬 개발(yarn start)에서는 디버그 토큰 사용 (배포된 사이트에는 영향 없음)
+if (process.env.NODE_ENV !== "production") {
+  (self as any).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+}
+initializeAppCheck(app, {
+  provider: new ReCaptchaEnterpriseProvider("6Lf-X-stAAAAAFh0ZxaXocD47hQkQ0q43GByaQ-L"),
+  isTokenAutoRefreshEnabled: true
+});
+
 const db = getFirestore(app);
 const auth = getAuth(app);
 
