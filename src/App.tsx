@@ -419,7 +419,8 @@ const todayUtc = () => new Date().toISOString().slice(0, 10);
 
 // 무료 한도(쓰기)를 아끼기 위해 일부 기기만 통계를 보냄 (기기마다 한 번 정해서 계속 유지)
 // 0 = 통계 끔, 1 = 모든 기기 (한도에 여유가 생기면 올리면 됨)
-const STATS_SAMPLE_RATE = 0; // 서버 쓰기 한도를 아끼기 위해 현재 끔. 여유가 생기면 0.02 같은 작은 값부터 올리세요
+const STATS_SAMPLE_RATE = 0.1; // 무료 쓰기 한도를 위해 10%만 수집
+const STATS_LANG = "ko"; // 영어/일본어 화면을 추가하면 선택된 언어로 바꾸기 ("ko" | "en" | "ja")
 const STATS_SAMPLE_KEY = "es_stats_sample";
 
 function shouldSendStats(): boolean {
@@ -1256,6 +1257,7 @@ export default function App() {
   // 완성된 선택을 익명 통계로 보냄 (실패해도 사용자에게는 영향 없음)
   const sendAnonymousStats = (finalPicks: Picks) => {
     if (!uid) return; // 인증 전이면 건너뜀
+    if (isServerBusyNow()) return; // ← 추가: 서버가 혼잡하면 통계는 건너뜀
     const clean: Picks = {};
     Object.entries(finalPicks).forEach(([g, m]) => {
       if (validGroupIds.has(g)) clean[g] = m;
@@ -1271,6 +1273,7 @@ export default function App() {
     setDoc(doc(db, "stats", getStatsId()), { picks: clean, day: todayUtc(), v: 1 })
       .then(() => saveLocal("es_stats_sig", signature))
       .catch((err) => console.warn("익명 통계 저장 실패(무시):", err));
+    setDoc(doc(db, "stats", getStatsId()), { picks: clean, day: todayUtc(), v: 2, lang: STATS_LANG }) // ← v: 1 → v: 2, lang 추가
   };
 
   // 만들어진 이미지를 저장. 다운로드가 막힌 환경(앱 안 브라우저 등)이면 안내 창을 띄움
