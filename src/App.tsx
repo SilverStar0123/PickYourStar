@@ -11,6 +11,7 @@ import {
   updateDoc,
   writeBatch,
   getDoc,
+  getDocFromServer,
   getDocs,
   query,
   orderBy,
@@ -252,8 +253,10 @@ function parseUserDoc(data: DocumentData): UserDoc | null {
 const ROOM_CACHE_PREFIX = "es_room_cache:";
 const ROOM_CACHE_INDEX = "es_room_cache_index";
 const ROOM_CACHE_KEEP = 8; // 이 기기에 저장해 둘 최근 방 개수
-const ROOM_CACHE_TTL_MS = 5 * 60 * 1000; // 이 시간 안에 다시 열면 서버를 읽지 않음
-const MAX_USERS_PER_ROOM = 100; // 한 번에 읽어 오는 최대 참여자 수 (먼저 제출한 순)
+const ROOM_CACHE_TTL_MS = 20 * 60 * 1000; // 이 시간 안에 다시 열면 서버를 읽지 않음
+const MAX_USERS_PER_ROOM = 50; // 한 번에 읽어 오는 최대 참여자 수 (먼저 제출한 순). 방을 열 때마다 이만큼 읽기가 발생함
+const REFRESH_COOLDOWN_MS = 60 * 1000; // 새로고침 버튼 최소 간격
+const SUBMIT_COOLDOWN_MS = 15 * 1000; // 제출 버튼 최소 간격 (연타 방지)
 
 interface RoomData {
   source: "main" | "legacy"; // legacy = 이전 서버의 방 (읽기 전용)
@@ -404,7 +407,7 @@ const todayUtc = () => new Date().toISOString().slice(0, 10);
 
 // 무료 한도(쓰기)를 아끼기 위해 일부 기기만 통계를 보냄 (기기마다 한 번 정해서 계속 유지)
 // 0 = 통계 끔, 1 = 모든 기기 (한도에 여유가 생기면 올리면 됨)
-const STATS_SAMPLE_RATE = 0.1;
+const STATS_SAMPLE_RATE = 0; // 서버 쓰기 한도를 아끼기 위해 현재 끔. 여유가 생기면 0.02 같은 작은 값부터 올리세요
 const STATS_SAMPLE_KEY = "es_stats_sample";
 
 function shouldSendStats(): boolean {
@@ -505,6 +508,39 @@ function saveLocal(key: string, value: string) {
 
 const formatDate = (ms: number) => new Date(ms).toLocaleDateString("ko-KR");
 
+// ── 서버 혼잡(무료 한도 초과 등) 처리 ──
+const SERVER_BUSY_KEY = "es_server_busy_until";
+const SERVER_BUSY_MS = 10 * 60 * 1000; // 혼잡 판정 후 이 시간 동안은 서버 저장을 시도하지 않음
+const SERVER_BUSY_MSG =
+  "현재 서버가 혼잡하여 저장이 안 돼요. 다음에 시도해주세요.\n(내 선택 이미지 저장은 계속 가능해요)";
+
+function isServerBusyError(err: unknown): boolean {
+  const code = (err as { code?: string })?.code;
+  return (
+    code === "resource-exhausted" ||
+    code === "unavailable" ||
+    code === "deadline-exceeded" ||
+    (err as Error)?.message === "timeout"
+  );
+}
+
+function isServerBusyNow(): boolean {
+  try {
+    return Number(window.localStorage.getItem(SERVER_BUSY_KEY) || 0) > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function markServerBusy() {
+  saveLocal(SERVER_BUSY_KEY, String(Date.now() + SERVER_BUSY_MS));
+}
+
+function samePicks(a: Picks, b: Picks): boolean {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
+}
+
 // 서버가 응답하지 않을 때 '저장 중...'에서 영원히 멈추지 않도록
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
@@ -515,8 +551,27 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 
 const safeFileName = (s: string) => s.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40) || "my";
 
-// 화면의 한 영역을 PNG로 저장. expand=true면 가로 스크롤 영역을 전부 펼쳐서 캡처
-async function captureToPng(target: HTMLElement, filename: string, expand = false) {
+// ── 이미지 저장 ──
+// 기본은 항상 2배 해상도(기존과 동일). 캔버스가 너무 커서 실패했을 때만 낮춰서 한 번 더 시도함
+const IMAGE_SCALE = 2;
+// 카카오톡·인스타 등 앱 안 브라우저는 파일 다운로드를 막는 경우가 많아 미리보기(길게 눌러 저장)를 사용
+const IN_APP_BROWSER = /KAKAOTALK|Instagram|FBAN|FBAV|Line\/|NAVER\(inapp|Twitter|DaumApps|everytimeApp|; wv\)/i;
+
+async function renderOnce(target: HTMLElement, scale: number): Promise<Blob> {
+  const canvas = await html2canvas(target, {
+    useCORS: true,
+    scale,
+    backgroundColor: "#ffffff",
+    logging: false,
+    imageTimeout: 10000
+  });
+  return new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob 실패"))), "image/png")
+  );
+}
+
+// 화면의 한 영역을 PNG(Blob)로 만듦. expand=true면 가로 스크롤 영역을 전부 펼쳐서 캡처
+async function renderToBlob(target: HTMLElement, expand: boolean): Promise<Blob> {
   const originalOverflow = target.style.overflow;
   const originalWidth = target.style.width;
   if (expand) {
@@ -524,21 +579,43 @@ async function captureToPng(target: HTMLElement, filename: string, expand = fals
     target.style.width = `${target.scrollWidth}px`;
   }
   try {
-    const canvas = await html2canvas(target, {
-      useCORS: true,
-      scale: 2,
-      backgroundColor: "#ffffff"
-    });
-    const link = document.createElement("a");
-    link.download = filename;
-    link.href = canvas.toDataURL("image/png");
-    link.click();
+    try {
+      return await renderOnce(target, IMAGE_SCALE);
+    } catch (err) {
+      console.warn("2배 해상도 저장 실패, 낮춰서 다시 시도:", err);
+      return await renderOnce(target, 1);
+    }
   } finally {
     if (expand) {
       target.style.overflow = originalOverflow;
       target.style.width = originalWidth;
     }
   }
+}
+
+function triggerDownload(blob: Blob, filename: string): boolean {
+  try {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
 }
 
 export default function App() {
@@ -558,6 +635,9 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [agencies, setAgencies] = useState<Agency[]>([]);
 
+  const [previewImg, setPreviewImg] = useState<string | null>(null); // 다운로드가 안 되는 환경용 미리보기
+  const [serverBusy, setServerBusy] = useState<boolean>(() => isServerBusyNow());
+  const lastSubmitAt = useRef(0);
   const boardRef = useRef<HTMLDivElement>(null);
   const personalRef = useRef<HTMLDivElement>(null);
   const nicknameRef = useRef<HTMLInputElement>(null);
@@ -582,19 +662,16 @@ export default function App() {
 
   // ── 익명 로그인
   useEffect(() => {
-  const unsub = onAuthStateChanged(auth, (user) => {
-    if (user) {
-      setUid(user.uid);
-      setAuthError(false);
-    } else {
-      signInAnonymously(auth).catch((err) => {
-        console.error("익명 로그인 실패:", err.code, err.message);
-        setAuthError(true);
-      });
-    }
-  });
-  return unsub;
-}, []);
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (user) setUid(user.uid);
+    });
+    signInAnonymously(auth).catch((err) => {
+      console.error("익명 로그인 실패:", err);
+      setAuthError(true);
+    });
+    return unsub;
+  }, []);
+
   // ── CSV 로드 (멤버: ES_list.csv, 유닛 로고: units.csv)
   useEffect(() => {
     let cancelled = false;
@@ -749,6 +826,10 @@ export default function App() {
   // 결과표를 서버에서 다시 읽기 (실시간 연결 대신 사용)
   const refreshRoom = () => {
     if (!roomId || roomLoading) return;
+    if (roomFetchedAt && Date.now() - roomFetchedAt < REFRESH_COOLDOWN_MS) {
+      alert("방금 불러온 결과예요. 1분 뒤에 다시 새로고침할 수 있어요.");
+      return;
+    }
     forceRefresh.current = true;
     setRoomRefreshTick((t) => t + 1);
   };
@@ -916,6 +997,13 @@ export default function App() {
       .catch((err) => console.warn("익명 통계 저장 실패(무시):", err));
   };
 
+  // 이미지를 만들어 저장. 다운로드가 막힌 환경(앱 안 브라우저 등)이면 미리보기 창을 띄움
+  const saveImage = async (target: HTMLElement, filename: string, expand: boolean) => {
+    const blob = await renderToBlob(target, expand);
+    if (!IN_APP_BROWSER.test(navigator.userAgent) && triggerDownload(blob, filename)) return;
+    setPreviewImg(await blobToDataUrl(blob));
+  };
+
   const requireComplete = () => {
     if (pickedCount < totalGroups) {
       alert(`${totalGroups}명을 모두 골라주세요. (현재 ${pickedCount}명)`);
@@ -929,12 +1017,18 @@ export default function App() {
     if (!requireComplete()) return;
     const target = personalRef.current;
     if (!target) return;
-    sendAnonymousStats(picks);
     try {
-      await captureToPng(target, `${safeFileName(trimmedName || "my")}_picks.png`);
+      await saveImage(target, `${safeFileName(trimmedName || "my")}_picks.png`, false);
     } catch (err) {
       console.error("이미지 저장 에러:", err);
-      alert("이미지 저장에 실패했습니다.");
+      alert("이미지 저장에 실패했습니다. 잠시 후 다시 시도하거나 Chrome·Safari 같은 기본 브라우저에서 열어주세요.");
+      return;
+    }
+    // 통계 전송은 이미지 저장이 끝난 뒤, 실패해도 저장에 영향이 없도록 따로 처리
+    try {
+      sendAnonymousStats(picks);
+    } catch {
+      /* 무시 */
     }
   };
 
@@ -947,8 +1041,13 @@ export default function App() {
       nicknameRef.current?.focus();
       return;
     }
+    if (isServerBusyNow()) {
+      setServerBusy(true);
+      alert(SERVER_BUSY_MSG);
+      return;
+    }
     if (!uid) {
-      alert("서버에 연결 중이거나 연결에 실패했습니다. 잠시 후 다시 시도해주세요.");
+      alert(authError ? SERVER_BUSY_MSG : "서버에 연결 중입니다. 잠시 후 다시 시도해주세요.");
       return;
     }
     if (roomId && !roomLoaded) {
@@ -972,6 +1071,17 @@ export default function App() {
       Object.entries(picks).forEach(([g, m]) => {
         if (validGroupIds.has(g)) cleanPicks[g] = m;
       });
+
+      // 이미 같은 내용으로 제출돼 있으면 서버에 쓰지 않음 (쓰기 절약)
+      const mineNow = roomId ? roomUsers[uid] : undefined;
+      if (mineNow && mineNow.nickname === trimmedName && samePicks(mineNow.picks, cleanPicks)) {
+        setShowResult(true);
+        return;
+      }
+      if (Date.now() - lastSubmitAt.current < SUBMIT_COOLDOWN_MS) {
+        alert("방금 제출했어요. 잠시 후 다시 눌러주세요.");
+        return;
+      }
 
       // 문서 id = 내 uid → 내 데이터만 쓸 수 있고, 닉네임이 같아도 서로 다른 문서로 저장됨
       const userRef = doc(db, "rooms", rid, "users", uid);
@@ -1008,23 +1118,57 @@ export default function App() {
       setMyRooms(nextRooms);
       saveMyRooms(nextRooms);
 
-      // 내가 제출한 내용을 반영해서 결과를 서버에서 한 번 다시 읽음
-      forceRefresh.current = true;
-      if (!roomId) {
-        window.history.replaceState({}, "", `?room=${rid}`);
-        setRoomId(rid);
+      lastSubmitAt.current = Date.now();
+
+      // 제출 직후에는 방 전체(참여자 수만큼)를 다시 읽지 않고 '내 문서 1건'만 읽어 화면과 저장본에 반영 (읽기 절약)
+      let saved: UserDoc | null = null;
+      try {
+        const snap = await withTimeout(getDocFromServer(userRef), 8000);
+        saved = snap.exists() ? parseUserDoc(snap.data()) : null;
+      } catch {
+        saved = null;
+      }
+      if (saved && saved.joinedTs) {
+        const now = Date.now();
+        const nextData: RoomData = {
+          source: "main",
+          at: creating ? now : roomFetchedAt ?? now, // 기존 방은 '마지막으로 서버에서 읽은 시각'을 유지
+          name: creating ? newRoomName : roomName,
+          ownerUid: creating ? uid : roomOwner,
+          users: { ...(creating ? {} : roomUsers), [uid]: saved }
+        };
+        saveRoomCache(rid, nextData);
+        setRoomUsers(nextData.users);
+        setRoomName(nextData.name);
+        setRoomOwner(nextData.ownerUid);
+        setRoomSource("main");
+        setRoomFetchedAt(nextData.at);
+        setRoomMetaLoaded(true);
+        setRoomError(false);
+        setRoomLoaded(true);
+        setRoomStale(false);
+        if (creating) {
+          window.history.replaceState({}, "", `?room=${rid}`);
+          setRoomId(rid);
+        }
       } else {
-        setRoomRefreshTick((t) => t + 1);
+        // 내 문서를 못 읽었을 때만 예전처럼 방 전체를 다시 읽음
+        forceRefresh.current = true;
+        if (!roomId) {
+          window.history.replaceState({}, "", `?room=${rid}`);
+          setRoomId(rid);
+        } else {
+          setRoomRefreshTick((t) => t + 1);
+        }
       }
       setNickname(trimmedName);
       setShowResult(true);
     } catch (err) {
-      console.error("제출 에러:", err);
-      if (
-        (err as { code?: string })?.code === "resource-exhausted" ||
-        (err as Error)?.message === "timeout"
-      ) {
-        alert("지금은 서버에 저장할 수 없어요. 오늘 서버 사용량 한도에 도달했거나 서버 응답이 없는 상태예요. 잠시 후 다시 시도해주세요. (내 선택 이미지 저장은 계속 가능해요)");
+      console.error("제출 에러:", (err as { code?: string })?.code, err);
+      if (isServerBusyError(err)) {
+        markServerBusy();
+        setServerBusy(true);
+        alert(SERVER_BUSY_MSG);
       } else {
         alert("저장 중 오류가 발생했습니다. 네트워크 상태를 확인한 뒤 다시 시도해주세요.");
       }
@@ -1125,10 +1269,10 @@ export default function App() {
     const target = boardRef.current;
     if (!target) return;
     try {
-      await captureToPng(target, "multi_picks.png", true);
+      await saveImage(target, "multi_picks.png", true);
     } catch (err) {
       console.error("이미지 저장 에러:", err);
-      alert("이미지 저장에 실패했습니다.");
+      alert("이미지 저장에 실패했습니다. 잠시 후 다시 시도하거나 Chrome·Safari 같은 기본 브라우저에서 열어주세요.");
     }
   };
 
@@ -1197,7 +1341,7 @@ export default function App() {
             <div className="room-banner">
               <span>
                 {roomError
-                  ? "방 정보를 불러오지 못했습니다. 링크가 틀렸거나 서버 사용량 한도일 수 있어요."
+                  ? "방 정보를 불러오지 못했습니다. 링크가 틀렸거나 현재 서버가 혼잡할 수 있어요. 잠시 후 다시 시도해주세요."
                   : roomLoaded
                   ? `${roomSource === "legacy" ? "이전 서버의 방(보기 전용)" : "공유된 방에 참여 중"}${
                       roomName ? ` · ${roomName}` : ""
@@ -1349,9 +1493,16 @@ export default function App() {
                 {submitting ? "저장 중..." : roomId ? "이 방에 제출하기" : "공유 링크 만들기"}
               </button>
             </div>
-            <p className="hint">
-              완성한 선택은 닉네임·방 정보 없이 <b>익명 통계</b>에 반영될 수 있어요.
-            </p>
+            {STATS_SAMPLE_RATE > 0 && (
+              <p className="hint">
+                완성한 선택은 닉네임·방 정보 없이 <b>익명 통계</b>에 반영될 수 있어요.
+              </p>
+            )}
+            {serverBusy && (
+              <p className="hint busy-note">
+                현재 서버가 혼잡하여 공유 링크 만들기·제출이 어려워요. 내 선택 이미지 저장은 가능해요.
+              </p>
+            )}
             {authError && (
               <p className="hint">서버 연결에 실패해 공유 기능을 쓸 수 없어요. 이미지 저장은 가능합니다.</p>
             )}
@@ -1363,7 +1514,7 @@ export default function App() {
           {!roomLoaded && <p className="hint-inline" style={{ textAlign: "center" }}>방 정보를 불러오는 중...</p>}
           {roomError && (
             <p className="hint-inline" style={{ textAlign: "center" }}>
-              방 정보를 불러오지 못했습니다. 링크가 틀렸거나 서버 사용량 한도일 수 있어요.
+              방 정보를 불러오지 못했습니다. 링크가 틀렸거나 현재 서버가 혼잡할 수 있어요. 잠시 후 다시 시도해주세요.
             </p>
           )}
           <div className="result-buttons">
@@ -1526,6 +1677,18 @@ export default function App() {
                 )}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {previewImg && (
+        <div className="img-preview-overlay" onClick={() => setPreviewImg(null)}>
+          <div className="img-preview-box" onClick={(e) => e.stopPropagation()}>
+            <p>이미지를 길게 눌러(PC는 우클릭) 저장하세요</p>
+            <img src={previewImg} alt="저장할 이미지" />
+            <button type="button" className="download-btn" onClick={() => setPreviewImg(null)}>
+              닫기
+            </button>
           </div>
         </div>
       )}
