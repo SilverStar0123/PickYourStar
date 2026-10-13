@@ -1,0 +1,26 @@
+/* 언어 선택 (화면 위쪽 오른쪽) */
+.lang-switch {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.lang-switch button {
+  padding: 5px 12px;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  color: #666;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.lang-switch button:hover {
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+}
+.lang-switch button.active {
+  background: #ff6b6b;
+  border-color: #ff6b6b;
+  color: #fff;
+  font-weight: bold;
+}
