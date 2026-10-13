@@ -1276,10 +1276,9 @@ export default function App() {
     } catch {
       /* 무시 */
     }
-    setDoc(doc(db, "stats", getStatsId()), { picks: clean, day: todayUtc(), v: 1 })
-      .then(() => saveLocal("es_stats_sig", signature))
-      .catch((err) => console.warn("익명 통계 저장 실패(무시):", err));
-    setDoc(doc(db, "stats", getStatsId()), { picks: clean, day: todayUtc(), v: 2, lang: STATS_LANG }) // ← v: 1 → v: 2, lang 추가
+    setDoc(doc(db, "stats", getStatsId()), { picks: clean, day: todayUtc(), v: 2, lang: STATS_LANG })
+  .then(() => saveLocal("es_stats_sig", signature))
+  .catch((err) => console.warn("익명 통계 저장 실패(무시):", err));
   };
 
   // 만들어진 이미지를 저장. 다운로드가 막힌 환경(앱 안 브라우저 등)이면 안내 창을 띄움
