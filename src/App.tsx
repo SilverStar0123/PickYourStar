@@ -24,6 +24,9 @@ import {
 import "./styles.css";
 import { layoutLogos } from "./logoLayout";
 import { computeMatches } from "./matching";
+import "./lang.css";
+import { LANGS, LANG_LABEL, LANG_KEY, LOCALE, detectInitialLang, translate } from "./i18n";
+import type { Lang, MsgKey } from "./i18n";
 import Papa from "papaparse";
 
 // ───────────────────────── Firebase ─────────────────────────
@@ -67,6 +70,7 @@ interface Member {
   name: string;
   img: string;
   fallback: string;
+  names: { en: string; ja: string }; // 화면 표시용 (id에는 쓰지 않음)
 }
 interface Group {
   id: string; // 유닛명
@@ -426,7 +430,6 @@ const todayUtc = () => new Date().toISOString().slice(0, 10);
 // 무료 한도(쓰기)를 아끼기 위해 일부 기기만 통계를 보냄 (기기마다 한 번 정해서 계속 유지)
 // 0 = 통계 끔, 1 = 모든 기기 (한도에 여유가 생기면 올리면 됨)
 const STATS_SAMPLE_RATE = 0.1; // 무료 쓰기 한도를 위해 10%만 수집
-const STATS_LANG = "ko"; // 영어/일본어 화면을 추가하면 선택된 언어로 바꾸기 ("ko" | "en" | "ja")
 const STATS_SAMPLE_KEY = "es_stats_sample";
 
 function shouldSendStats(): boolean {
@@ -525,13 +528,37 @@ function saveLocal(key: string, value: string) {
   }
 }
 
-const formatDate = (ms: number) => new Date(ms).toLocaleDateString("ko-KR");
+const formatDate = (ms: number, lang: Lang) => new Date(ms).toLocaleDateString(LOCALE[lang]);
+
+// 한국어로 적힌 유닛 이름의 영어/일본어 표기 (화면에 보여줄 때만 사용. 저장되는 id는 그대로 한국어 이름)
+const UNIT_LABELS: Record<string, { en: string; ja: string }> = {
+  "유성대": { en: "Ryuseitai", ja: "流星隊" },
+  "홍월": { en: "Akatsuki", ja: "紅月" }
+};
+
+// 비어 있으면 대체: 영어 → 한국어 / 일본어 → 영어 → 한국어
+function memberLabel(m: Member, lang: Lang): string {
+  if (lang === "en") return m.names.en || m.name;
+  if (lang === "ja") return m.names.ja || m.names.en || m.name;
+  return m.name;
+}
+
+// 화면에 보여줄 이름만 언어에 맞게 바꾼 복사본 (id, 선택 데이터는 그대로)
+function localizeAgencies(list: Agency[], lang: Lang): Agency[] {
+  if (lang === "ko") return list;
+  return list.map((a) => ({
+    ...a,
+    groups: a.groups.map((g) => ({
+      ...g,
+      name: UNIT_LABELS[g.id]?.[lang] ?? g.name,
+      members: g.members.map((m) => ({ ...m, name: memberLabel(m, lang) }))
+    }))
+  }));
+}
 
 // ── 서버 혼잡(무료 한도 초과 등) 처리 ──
 const SERVER_BUSY_KEY = "es_server_busy_until";
 const SERVER_BUSY_MS = 10 * 60 * 1000; // 혼잡 판정 후 이 시간 동안은 서버 저장을 시도하지 않음
-const SERVER_BUSY_MSG =
-  "현재 서버가 혼잡하여 저장이 안 돼요. 다음에 시도해주세요.\n(내 선택 이미지 저장은 계속 가능해요)";
 
 function isServerBusyError(err: unknown): boolean {
   const code = (err as { code?: string })?.code;
@@ -882,7 +909,20 @@ export default function App() {
 
   const [showResult, setShowResult] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [agencies, setAgencies] = useState<Agency[]>([]);
+  const [lang, setLang] = useState<Lang>(() => detectInitialLang());
+  const langRef = useRef<Lang>(lang); // effect 안에서 최신 언어를 쓰기 위함
+  langRef.current = lang;
+  const t = (key: MsgKey, params?: Record<string, string | number>) => translate(lang, key, params);
+  const changeLang = (l: Lang) => {
+    setLang(l);
+    saveLocal(LANG_KEY, l); // 직접 고른 언어는 이 기기에 기억
+  };
+  useEffect(() => {
+    document.documentElement.lang = lang;
+    document.title = translate(lang, "appTitle");
+  }, [lang]);
+  const [baseAgencies, setBaseAgencies] = useState<Agency[]>([]); // CSV 그대로 (한국어 이름)
+  const agencies = useMemo(() => localizeAgencies(baseAgencies, lang), [baseAgencies, lang]); // 화면 표시용
 
   const [preview, setPreview] = useState<{ src: string; blob: Blob; name: string } | null>(null); // 다운로드가 안 되는 환경용 안내 창
   const [savingImage, setSavingImage] = useState(false);
@@ -930,7 +970,7 @@ export default function App() {
       try {
         const rows = await loadCsv("ES_list.csv");
         if (rows.length > 0 && Object.keys(rows[0]).join("").includes("html")) {
-          alert("CSV 파일 경로를 찾지 못해 데이터를 불러올 수 없습니다.");
+          alert(translate(langRef.current, "alertCsvPath"));
           return;
         }
 
@@ -976,7 +1016,8 @@ export default function App() {
                   groupId: unit.name,
                   name: mName,
                   img: resolveImg(stripQuotes(r.img), MEMBER_IMG_DIR) || fallback,
-                  fallback
+                  fallback,
+                  names: { en: stripQuotes(r.name_en ?? ""), ja: stripQuotes(r.name_ja ?? "") }
                 };
               })
             });
@@ -992,10 +1033,10 @@ export default function App() {
           };
         });
 
-        setAgencies(parsed);
+        setBaseAgencies(parsed);
       } catch (err) {
         console.error("CSV 로드 에러:", err);
-        alert("CSV 파일을 읽는 중 오류가 발생했습니다.");
+        alert(translate(langRef.current, "alertCsvError"));
       }
     })();
     return () => {
@@ -1104,7 +1145,7 @@ export default function App() {
   const refreshRoom = () => {
     if (!roomId || roomLoading) return;
     if (roomFetchedAt && Date.now() - roomFetchedAt < REFRESH_COOLDOWN_MS) {
-      alert("방금 불러온 결과예요. 1분 뒤에 다시 새로고침할 수 있어요.");
+      alert(t("alertRefreshCooldown"));
       return;
     }
     forceRefresh.current = true;
@@ -1125,7 +1166,7 @@ export default function App() {
   // 유닛 로고의 가로세로 비율을 미리 읽어 둠 (결과표에서 로고 크기를 맞추는 데 사용)
   useEffect(() => {
     let cancelled = false;
-    agencies.forEach((a) =>
+    baseAgencies.forEach((a) =>
       a.groups.forEach((g) => {
         const im = new Image();
         im.onload = () => {
@@ -1139,7 +1180,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [agencies]);
+  }, [baseAgencies]);
 
   // ── 파생 데이터
   const totalGroups = useMemo(() => agencies.reduce((s, a) => s + a.groups.length, 0), [agencies]);
@@ -1276,9 +1317,9 @@ export default function App() {
     } catch {
       /* 무시 */
     }
-    setDoc(doc(db, "stats", getStatsId()), { picks: clean, day: todayUtc(), v: 2, lang: STATS_LANG })
-  .then(() => saveLocal("es_stats_sig", signature))
-  .catch((err) => console.warn("익명 통계 저장 실패(무시):", err));
+    setDoc(doc(db, "stats", getStatsId()), { picks: clean, day: todayUtc(), v: 2, lang })
+      .then(() => saveLocal("es_stats_sig", signature))
+      .catch((err) => console.warn("익명 통계 저장 실패(무시):", err));
   };
 
   // 만들어진 이미지를 저장. 다운로드가 막힌 환경(앱 안 브라우저 등)이면 안내 창을 띄움
@@ -1310,6 +1351,7 @@ export default function App() {
       .join("");
     const u = new URL(window.location.href);
     u.hash = "";
+    u.searchParams.set("lang", lang);
     u.searchParams.set("pk", code);
     if (trimmedName) u.searchParams.set("nk", trimmedName);
     return u.toString();
@@ -1323,7 +1365,7 @@ export default function App() {
     } else if (/Android/i.test(ua)) {
       window.location.href = `intent://${url.replace(/^https?:\/\//, "")}#Intent;scheme=https;package=com.android.chrome;end`;
     } else {
-      alert("화면 모서리의 ⋯ 메뉴에서 '다른 브라우저로 열기'(또는 'Safari로 열기')를 눌러주세요.\n안 보이면 '주소 복사'를 눌러 Chrome·Safari에 붙여 넣으세요.");
+      alert(t("alertExternalBrowser"));
     }
   };
 
@@ -1331,8 +1373,8 @@ export default function App() {
     const ok = await copyText(buildTransferUrl());
     alert(
       ok
-        ? "주소를 복사했어요. Chrome·Safari 주소창에 붙여 넣으면 지금 고른 선택이 그대로 이어져요."
-        : "복사에 실패했습니다."
+        ? t("alertTransferCopied")
+        : t("alertCopyFailed")
     );
   };
 
@@ -1341,13 +1383,13 @@ export default function App() {
     try {
       await navigator.share({ files: [new File([preview.blob], preview.name, { type: "image/png" })] });
     } catch (err) {
-      if ((err as Error)?.name !== "AbortError") alert("공유 창을 열지 못했어요. 다른 방법을 사용해 주세요.");
+      if ((err as Error)?.name !== "AbortError") alert(t("alertShareFailed"));
     }
   };
 
   const requireComplete = () => {
     if (pickedCount < totalGroups) {
-      alert(`${totalGroups}명을 모두 골라주세요. (현재 ${pickedCount}명)`);
+      alert(t("alertPickAll", { total: totalGroups, picked: pickedCount }));
       return false;
     }
     return true;
@@ -1358,13 +1400,13 @@ export default function App() {
     if (!requireComplete()) return;
     try {
       await runSave(
-        () => renderPersonalBlob(agencies, picks, memberMap, trimmedName ? `${trimmedName}의 취향표` : "나의 취향표"),
+        () => renderPersonalBlob(agencies, picks, memberMap, trimmedName ? t("personalTitleNamed", { name: trimmedName }) : t("personalTitleDefault")),
         `${safeFileName(trimmedName || "my")}_picks.png`,
         30000
       );
     } catch (err) {
       console.error("이미지 저장 에러:", err);
-      alert("이미지 저장에 실패했습니다. 잠시 후 다시 시도하거나 Chrome·Safari 같은 기본 브라우저에서 열어주세요.");
+      alert(t("alertImageFail"));
       return;
     }
     // 통계 전송은 이미지 저장이 끝난 뒤, 실패해도 저장에 영향이 없도록 따로 처리
@@ -1380,30 +1422,30 @@ export default function App() {
     if (submitting) return;
     if (!requireComplete()) return;
     if (!trimmedName) {
-      alert("공유하려면 닉네임을 입력해주세요.");
+      alert(t("alertNeedNickname"));
       nicknameRef.current?.focus();
       return;
     }
     if (isServerBusyNow()) {
       setServerBusy(true);
-      alert(SERVER_BUSY_MSG);
+      alert(t("serverBusyMsg"));
       return;
     }
     if (!uid) {
-      alert(authError ? SERVER_BUSY_MSG : "서버에 연결 중입니다. 잠시 후 다시 시도해주세요.");
+      alert(authError ? t("serverBusyMsg") : t("alertConnecting"));
       return;
     }
     if (roomId && !roomLoaded) {
-      alert("방 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.");
+      alert(t("alertRoomLoading"));
       return;
     }
     if (roomId && roomSource === "legacy") {
-      alert("이전 서버에서 만든 방이라 보기만 가능해요. 새로 제출하려면 '새 방 만들기'를 눌러주세요.");
+      alert(t("alertLegacyReadOnly"));
       return;
     }
     // 서버 시간 도입 전에 만든 예전 방의 내 기록은 수정할 수 없음 (보기만 가능)
     if (uid && roomUsers[uid] && !roomUsers[uid].joinedTs) {
-      alert("이 방은 이전 버전에서 만들어져 내 기록을 수정할 수 없어요. 결과는 볼 수 있고, 수정하려면 '새 방 만들기'로 새로 제출해주세요.");
+      alert(t("alertLegacyOwn"));
       return;
     }
 
@@ -1422,7 +1464,7 @@ export default function App() {
         return;
       }
       if (Date.now() - lastSubmitAt.current < SUBMIT_COOLDOWN_MS) {
-        alert("방금 제출했어요. 잠시 후 다시 눌러주세요.");
+        alert(t("alertSubmitCooldown"));
         return;
       }
 
@@ -1511,9 +1553,9 @@ export default function App() {
       if (isServerBusyError(err)) {
         markServerBusy();
         setServerBusy(true);
-        alert(SERVER_BUSY_MSG);
+        alert(t("serverBusyMsg"));
       } else {
-        alert("저장 중 오류가 발생했습니다. 네트워크 상태를 확인한 뒤 다시 시도해주세요.");
+        alert(t("alertSaveError"));
       }
     } finally {
       setSubmitting(false);
@@ -1536,16 +1578,16 @@ export default function App() {
         document.body.removeChild(ta);
         if (!ok) throw new Error("copy failed");
       }
-      alert("공유 링크가 복사되었습니다!");
+      alert(t("alertLinkCopied"));
     } catch {
-      alert("복사에 실패했습니다. 주소창의 링크를 직접 복사해주세요.");
+      alert(t("alertLinkCopyFailed"));
     }
   };
 
   // 지금 방에서 나가 새 방을 만들 준비: 고른 픽과 닉네임은 유지, 기존 방의 제출 기록은 그대로 남음
   const startNewRoom = () => {
     const ok = window.confirm(
-      "새 방을 만들까요?\n지금 고른 픽과 닉네임은 그대로 두고, 공유 링크만 새로 만들 수 있어요.\n(지금 방에 낸 내 기록은 그대로 남아요)"
+      t("confirmNewRoom")
     );
     if (!ok) return;
     window.history.replaceState({}, "", window.location.pathname);
@@ -1568,7 +1610,7 @@ export default function App() {
   const openRoom = (id: string) => {
     if (id === roomId) return;
     if (pickedCount > 0) {
-      const ok = window.confirm("다른 방으로 이동하면 지금 고르던 픽은 사라져요. 이동할까요?");
+      const ok = window.confirm(t("confirmSwitchRoom"));
       if (!ok) return;
     }
     window.history.replaceState({}, "", `${window.location.pathname}?room=${id}`);
@@ -1591,7 +1633,7 @@ export default function App() {
     // 방을 만든 사람만 이름 변경 가능 (규칙에서도 막음)
   const renameRoom = async () => {
     if (!roomId || !uid || roomOwner !== uid) return;
-    const input = window.prompt(`새 방 이름 (최대 ${MAX_ROOM_NAME}자)`, roomName);
+    const input = window.prompt(t("promptRename", { max: MAX_ROOM_NAME }), roomName);
     if (input === null) return;
     const newName = input.trim().slice(0, MAX_ROOM_NAME);
     try {
@@ -1607,7 +1649,7 @@ export default function App() {
       });
     } catch (err) {
       console.error("방 이름 변경 에러:", err);
-      alert("방 이름을 바꾸지 못했습니다. 방을 만든 사람만 바꿀 수 있어요.");
+      alert(t("alertRenameFail"));
     }
   };
 
@@ -1625,19 +1667,35 @@ export default function App() {
       await runSave(() => renderToBlob(target, true), "multi_picks.png", 60000);
     } catch (err) {
       console.error("이미지 저장 에러:", err);
-      alert("이미지 저장에 실패했습니다. 잠시 후 다시 시도하거나 Chrome·Safari 같은 기본 브라우저에서 열어주세요.");
+      alert(t("alertImageFail"));
     }
   };
 
   // ── 화면
-  if (agencies.length === 0) return <div className="App notice-page">데이터 불러오는 중...</div>;
+  if (agencies.length === 0) return <div className="App notice-page">{t("loadingData")}</div>;
 
   const myResultExists = !!uid && !!roomUsers[uid];
+
+  const langSwitch = (
+    <div className="lang-switch" role="group" aria-label={t("langLabel")}>
+      {LANGS.map((l) => (
+        <button
+          key={l}
+          type="button"
+          className={l === lang ? "active" : ""}
+          aria-pressed={l === lang}
+          onClick={() => changeLang(l)}
+        >
+          {LANG_LABEL[l]}
+        </button>
+      ))}
+    </div>
+  );
 
   const myRoomsPanel =
     myRooms.length > 0 ? (
       <details className="my-rooms">
-        <summary>내가 참여한 방 ({myRooms.length})</summary>
+        <summary>{t("myRoomsSummary", { n: myRooms.length })}</summary>
         <ul>
           {myRooms.map((r) => (
             <li key={r.id} className={r.id === roomId ? "current" : ""}>
@@ -1647,16 +1705,16 @@ export default function App() {
                 onClick={() => openRoom(r.id)}
                 disabled={r.id === roomId}
               >
-                <span className="room-title">{r.roomName || "이름 없는 방"}</span>
+                <span className="room-title">{r.roomName || t("unnamedRoom")}</span>
                 <span className="room-nick">{r.nickname}</span>
-                <span className="room-date">{formatDate(r.lastAt)}</span>
+                <span className="room-date">{formatDate(r.lastAt, lang)}</span>
                 <span className="room-code">{r.id.slice(0, 6)}…</span>
-                {r.id === roomId && <span className="room-now">현재 방</span>}
+                {r.id === roomId && <span className="room-now">{t("currentRoom")}</span>}
               </button>
               <button
                 type="button"
                 className="room-remove"
-                aria-label="목록에서 삭제"
+                aria-label={t("removeFromList")}
                 onClick={() => removeMyRoom(r.id)}
               >
                 ×
@@ -1664,17 +1722,18 @@ export default function App() {
             </li>
           ))}
         </ul>
-        <p className="hint-inline">이 기기에만 저장돼요. 목록에서 지워도 방 자체는 사라지지 않아요.</p>
+        <p className="hint-inline">{t("myRoomsHint")}</p>
       </details>
     ) : null;
 
   return (
     <div className="App">
+      {langSwitch}
       {!showResult ? (
         <>
           {myRoomsPanel}
-          <h1>앙스타 유닛별 취향표</h1>
-          <p className="subtitle">유닛마다 한 명씩, 총 {totalGroups}명을 골라주세요</p>
+          <h1>{t("appTitle")}</h1>
+          <p className="subtitle">{t("subtitle", { total: totalGroups })}</p>
           <p className="progress">
             {pickedCount} / {totalGroups}
             {pickedCount > 0 && (
@@ -1682,10 +1741,10 @@ export default function App() {
                 type="button"
                 className="reset-btn"
                 onClick={() => {
-                  if (window.confirm("고른 선택을 모두 지우고 처음부터 다시 할까요?")) setPicks({});
+                  if (window.confirm(t("confirmReset"))) setPicks({});
                 }}
               >
-                초기화
+                {t("reset")}
               </button>
             )}
           </p>
@@ -1694,20 +1753,20 @@ export default function App() {
             <div className="room-banner">
               <span>
                 {roomError
-                  ? "방 정보를 불러오지 못했습니다. 링크가 틀렸거나 현재 서버가 혼잡할 수 있어요. 잠시 후 다시 시도해주세요."
+                  ? t("roomLoadError")
                   : roomLoaded
-                  ? `${roomSource === "legacy" ? "이전 서버의 방(보기 전용)" : "공유된 방에 참여 중"}${
+                  ? `${roomSource === "legacy" ? t("roomBannerLegacy") : t("roomBannerJoined")}${
                       roomName ? ` · ${roomName}` : ""
-                    } · 참여자 ${displayUsers.length}명`
-                  : "방 정보를 불러오는 중..."}
+                    } · ${t("participantsCount", { n: displayUsers.length })}`
+                  : t("roomLoading")}
               </span>
               {displayUsers.length > 0 && (
                 <button type="button" onClick={() => setShowResult(true)}>
-                  다른 사람 결과 보기
+                  {t("viewOthers")}
                 </button>
               )}
               <button type="button" className="ghost" onClick={startNewRoom}>
-                새 방 만들기
+                {t("newRoom")}
               </button>
             </div>
           )}
@@ -1760,11 +1819,11 @@ export default function App() {
 
           {/* 내 선택 미리보기 + 저장/공유 */}
           <section className="finish-section">
-            <h2 className="finish-title">내 선택</h2>
+            <h2 className="finish-title">{t("myPicksTitle")}</h2>
             <div className="personal-wrap">
               <div ref={personalRef} className="personal-card">
                 <h3 className="personal-title">
-                  {trimmedName ? `${trimmedName}의 취향표` : "나의 취향표"}
+                  {trimmedName ? t("personalTitleNamed", { name: trimmedName }) : t("personalTitleDefault")}
                 </h3>
                 <div className="personal-grid">
                   {agencies.map((agency) => (
@@ -1796,7 +1855,7 @@ export default function App() {
             </div>
 
             <div className="nickname-row">
-              <label htmlFor="nickname">닉네임</label>
+              <label htmlFor="nickname">{t("nickname")}</label>
               <input
                 id="nickname"
                 ref={nicknameRef}
@@ -1807,18 +1866,17 @@ export default function App() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur();
                 }}
-                placeholder="예: 보리"
+                placeholder={t("nicknamePlaceholder")}
               />
             </div>
             <p className="hint">
-              닉네임을 쓰면 이미지에 “닉네임의 취향표”로 들어가요. 이미지 저장은 비워둬도 되고,
-              공유 링크를 만들 때는 꼭 필요해요.
+              {t("nicknameHint")}
             </p>
 
             {!roomId && (
               <>
                 <div className="nickname-row">
-                  <label htmlFor="roomname">방 이름</label>
+                  <label htmlFor="roomname">{t("roomNameLabel")}</label>
                   <input
                     id="roomname"
                     type="text"
@@ -1828,12 +1886,11 @@ export default function App() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur();
                     }}
-                    placeholder="예: 우리 모임 취향표 (선택)"
+                    placeholder={t("roomNamePlaceholder")}
                   />
                 </div>
                 <p className="hint">
-                  공유 링크를 만들 때만 정할 수 있어요. 결과표 이미지에 “방이름의 결과”로 표시되고,
-                  방을 만든 사람만 나중에 바꿀 수 있어요.
+                  {t("roomNameHint")}
                 </p>
               </>
             )}
@@ -1845,42 +1902,42 @@ export default function App() {
                 disabled={savingImage}
                 style={{ backgroundColor: "#20c997" }}
               >
-                {savingImage ? "이미지 만드는 중..." : "내 선택 이미지 저장"}
+                {savingImage ? t("makingImage") : t("saveMyImage")}
               </button>
               <button className="download-btn" onClick={handleSubmit} disabled={submitting}>
-                {submitting ? "저장 중..." : roomId ? "이 방에 제출하기" : "공유 링크 만들기"}
+                {submitting ? t("saving") : roomId ? t("submitToRoom") : t("createShareLink")}
               </button>
             </div>
             {STATS_SAMPLE_RATE > 0 && (
               <p className="hint">
-                완성한 선택은 닉네임·방 정보 없이 <b>익명 통계</b>에 반영될 수 있어요.
+                {t("statsNoticePre")}<b>{t("statsNoticeBold")}</b>{t("statsNoticePost")}
               </p>
             )}
             {serverBusy && (
               <p className="hint busy-note">
-                현재 서버가 혼잡하여 공유 링크 만들기·제출이 어려워요. 내 선택 이미지 저장은 가능해요.
+                {t("serverBusyNote")}
               </p>
             )}
             {authError && (
-              <p className="hint">서버 연결에 실패해 공유 기능을 쓸 수 없어요. 이미지 저장은 가능합니다.</p>
+              <p className="hint">{t("authErrorNote")}</p>
             )}
           </section>
         </>
       ) : (
         <div className="result-view">
           {myRoomsPanel}
-          {!roomLoaded && <p className="hint-inline" style={{ textAlign: "center" }}>방 정보를 불러오는 중...</p>}
+          {!roomLoaded && <p className="hint-inline" style={{ textAlign: "center" }}>{t("roomLoading")}</p>}
           {roomError && (
             <p className="hint-inline" style={{ textAlign: "center" }}>
-              방 정보를 불러오지 못했습니다. 링크가 틀렸거나 현재 서버가 혼잡할 수 있어요. 잠시 후 다시 시도해주세요.
+              {t("roomLoadError")}
             </p>
           )}
           <div className="result-buttons">
             <button className="download-btn" onClick={copyLink} style={{ backgroundColor: "#4dabf7" }}>
-              공유 링크 복사
+              {t("copyLink")}
             </button>
             <button className="download-btn" onClick={() => setShowResult(false)}>
-              {myResultExists ? "내 픽 수정하기" : "내 픽 고르기"}
+              {myResultExists ? t("editMyPicks") : t("choosePicks")}
             </button>
             <button
               className="download-btn"
@@ -1888,14 +1945,14 @@ export default function App() {
               disabled={savingImage}
               style={{ backgroundColor: "#20c997" }}
             >
-              {savingImage ? "이미지 만드는 중..." : "결과표 이미지 저장"}
+              {savingImage ? t("makingImage") : t("saveBoardImage")}
             </button>
             <button className="download-btn" onClick={startNewRoom} style={{ backgroundColor: "#868e96" }}>
-              새 방 만들기
+              {t("newRoom")}
             </button>
             {!!uid && roomOwner === uid && (
               <button className="download-btn" onClick={renameRoom} style={{ backgroundColor: "#845ef7" }}>
-                방 이름 수정
+                {t("renameRoomBtn")}
               </button>
             )}
           </div>
@@ -1903,18 +1960,18 @@ export default function App() {
           <div className="room-status">
             {roomFetchedAt && (
               <span>
-                {new Date(roomFetchedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}에 불러온 결과
+                {t("loadedAt", { time: new Date(roomFetchedAt).toLocaleTimeString(LOCALE[lang], { hour: "2-digit", minute: "2-digit" }) })}
               </span>
             )}
             <button type="button" className="link-btn" onClick={refreshRoom} disabled={roomLoading}>
-              {roomLoading ? "불러오는 중..." : "새로고침"}
+              {roomLoading ? t("refreshing") : t("refresh")}
             </button>
-            {roomSource === "legacy" && <span className="status-note">이전 서버의 방이라 보기만 가능해요</span>}
+            {roomSource === "legacy" && <span className="status-note">{t("legacyViewOnly")}</span>}
             {roomStale && (
-              <span className="status-note">서버에서 새로 읽지 못해 이 기기에 저장된 결과를 보여주고 있어요</span>
+              <span className="status-note">{t("staleNote")}</span>
             )}
             {displayUsers.length >= MAX_USERS_PER_ROOM && (
-              <span className="status-note">참여자가 많아 먼저 제출한 {MAX_USERS_PER_ROOM}명까지만 보여요</span>
+              <span className="status-note">{t("roomFullNote", { max: MAX_USERS_PER_ROOM })}</span>
             )}
           </div>
 
@@ -1930,23 +1987,23 @@ export default function App() {
               <span className="switch-track" aria-hidden="true">
                 <span className="switch-thumb" />
               </span>
-              <span>일치율 표시</span>
+              <span>{t("showMatch")}</span>
             </label>
             {matchOn && (
               <label>
-                기준{" "}
+                {t("baseLabel")}{" "}
                 <select value={baseUserId ?? ""} onChange={(e) => setBaseChoice(e.target.value)}>
                   {displayUsers.map((u) => (
                     <option key={u.id} value={u.id}>
                       {u.label}
-                      {u.id === uid ? " (나)" : ""}
+                      {u.id === uid ? t("meSuffix") : ""}
                     </option>
                   ))}
                 </select>
               </label>
             )}
             {displayUsers.length < 2 && (
-              <span className="hint-inline">참여자가 2명 이상이면 사용할 수 있어요</span>
+              <span className="hint-inline">{t("needTwo")}</span>
             )}
           </div>
 
@@ -1956,11 +2013,11 @@ export default function App() {
             style={{ ["--slot" as any]: `${BOARD_SLOT}px`, ["--gap" as any]: `${BOARD_GAP}px` }}
           >
             <h2 style={{ textAlign: "center", marginBottom: matchOn ? "6px" : "30px" }}>
-              {roomName ? `${roomName}의 결과` : "참여자별 취향표"}
+              {roomName ? t("resultTitleRoom", { name: roomName }) : t("resultTitleDefault")}
             </h2>
             {matchOn && (
               <p className="match-subtitle">
-                {baseLabel}님 기준 일치율 · 같은 픽은 빨간 테두리
+                {t("matchSubtitle", { name: baseLabel })}
               </p>
             )}
 
@@ -1988,7 +2045,7 @@ export default function App() {
                   </div>
                 ))}
               </div>
-              {matchOn && <div className="compare-match match-head">일치율</div>}
+              {matchOn && <div className="compare-match match-head">{t("matchHead")}</div>}
             </div>
 
             {displayUsers.map((u) => (
@@ -2025,7 +2082,7 @@ export default function App() {
                     }`}
                   >
                     {u.id === baseUserId ? (
-                      <div className="match-base">기준</div>
+                      <div className="match-base">{t("matchBase")}</div>
                     ) : (
                       <>
                         <div className="match-percent">
@@ -2048,28 +2105,28 @@ export default function App() {
         <div className="img-preview-overlay" onClick={() => setPreview(null)}>
           <div className="img-preview-box" onClick={(e) => e.stopPropagation()}>
             <p className="preview-guide">
-              이 브라우저에서는 이미지를 바로 저장할 수 없어요.
+              {t("previewGuideA")}
               <br />
-              아래 방법 중 하나를 사용해 주세요.
+              {t("previewGuideB")}
             </p>
             <div className="preview-actions">
               {typeof navigator.canShare === "function" &&
                 navigator.canShare({ files: [new File([preview.blob], preview.name, { type: "image/png" })] }) && (
                   <button type="button" className="download-btn" onClick={sharePreview}>
-                    이미지 저장·공유
+                    {t("previewShare")}
                   </button>
                 )}
               <button type="button" className="download-btn" onClick={openExternal}>
-                기본 브라우저로 열기
+                {t("previewOpenExternal")}
               </button>
               <button type="button" className="download-btn" onClick={copyTransferUrl}>
-                주소 복사
+                {t("previewCopyUrl")}
               </button>
             </div>
-            <img src={preview.src} alt="저장할 이미지" />
-            <p className="preview-sub">이미지를 길게 눌러 저장 메뉴가 나오면 그대로 저장해도 돼요.</p>
+            <img src={preview.src} alt={t("previewImgAlt")} />
+            <p className="preview-sub">{t("previewSub")}</p>
             <button type="button" className="download-btn" onClick={() => setPreview(null)}>
-              닫기
+              {t("close")}
             </button>
           </div>
         </div>
