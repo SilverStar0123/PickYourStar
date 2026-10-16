@@ -25,7 +25,7 @@ import "./styles.css";
 import { layoutLogos } from "./logoLayout";
 import { computeMatches } from "./matching";
 import "./lang.css";
-import { LANGS, LANG_LABEL, LANG_KEY, LOCALE, detectInitialLang, translate } from "./i18n";
+import { LANGS, LANG_LABEL, LANG_KEY, LOCALE, detectInitialLang, normalizeLang, translate } from "./i18n";
 import type { Lang, MsgKey } from "./i18n";
 import Papa from "papaparse";
 
@@ -64,23 +64,28 @@ const legacyDb = legacyApp ? getFirestore(legacyApp) : null;
 const legacyAuth = legacyApp ? getAuth(legacyApp) : null;
 
 // ───────────────────────── 타입 ─────────────────────────
+// 언어별 표시 이름 (비어 있으면 기본 이름으로 대체). id·저장 데이터는 항상 한국어 이름 기준이라 언어와 무관함
+type NameMap = Partial<Record<Lang, string>>;
+
 interface Member {
   id: string; // "유닛명::멤버명" (CSV 순서와 무관한 안정적인 키)
   groupId: string;
   name: string;
+  names?: NameMap;
   img: string;
   fallback: string;
-  names: { en: string; ja: string }; // 화면 표시용 (id에는 쓰지 않음)
 }
 interface Group {
   id: string; // 유닛명
   name: string;
+  names?: NameMap;
   logo: string;
   members: Member[];
 }
 interface Agency {
   id: string;
   name: string;
+  names?: NameMap;
   logo: string;
   groups: Group[];
 }
@@ -543,15 +548,18 @@ function memberLabel(m: Member, lang: Lang): string {
   return m.name;
 }
 
-// 화면에 보여줄 이름만 언어에 맞게 바꾼 복사본 (id, 선택 데이터는 그대로)
+// 선택한 언어에 맞게 소속사·유닛·멤버의 표시 이름만 바꾼 목록을 만듦 (id·그룹 키는 그대로)
 function localizeAgencies(list: Agency[], lang: Lang): Agency[] {
   if (lang === "ko") return list;
+  const pick = (base: string, names?: NameMap) =>
+    (lang === "ja" ? names?.ja || names?.en : names?.[lang]) || base;
   return list.map((a) => ({
     ...a,
+    name: pick(a.name, a.names),
     groups: a.groups.map((g) => ({
       ...g,
-      name: UNIT_LABELS[g.id]?.[lang] ?? g.name,
-      members: g.members.map((m) => ({ ...m, name: memberLabel(m, lang) }))
+      name: pick(g.name, g.names),
+      members: g.members.map((m) => ({ ...m, name: pick(m.name, m.names) }))
     }))
   }));
 }
@@ -917,10 +925,17 @@ export default function App() {
     setLang(l);
     saveLocal(LANG_KEY, l); // 직접 고른 언어는 이 기기에 기억
   };
+  // 주소에 ?lang= 이 실려 왔다면(앱 안 브라우저에서 넘어온 경우) 이 기기의 언어로 저장하고,
+  // 공유 링크에 언어가 섞이지 않도록 주소에서 지움
   useEffect(() => {
-    document.documentElement.lang = lang;
-    document.title = translate(lang, "appTitle");
-  }, [lang]);
+    const sp = new URLSearchParams(window.location.search);
+    if (!sp.has("lang")) return;
+    const fromUrl = normalizeLang(sp.get("lang"));
+    if (fromUrl) saveLocal(LANG_KEY, fromUrl);
+    sp.delete("lang");
+    const qs = sp.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+  }, []);
   const [baseAgencies, setBaseAgencies] = useState<Agency[]>([]); // CSV 그대로 (한국어 이름)
   const agencies = useMemo(() => localizeAgencies(baseAgencies, lang), [baseAgencies, lang]); // 화면 표시용
 
@@ -976,6 +991,7 @@ export default function App() {
 
         // units.csv: unit,logo  → 유닛·소속사 이름(대소문자 무시)으로 로고 연결. 파일이 없어도 정상 동작
         const logoMap: Record<string, string> = {};
+        const nameMap: Record<string, NameMap> = {}; // units.csv의 name_en / name_ja
         try {
           const unitRows = await loadCsv("units.csv");
           unitRows.forEach((r) => {
@@ -983,6 +999,9 @@ export default function App() {
             const key = stripQuotes(r.unit).toLowerCase();
             const logo = resolveImg(stripQuotes(r.logo), LOGO_IMG_DIR);
             if (key && logo) logoMap[key] = logo;
+            const en = stripQuotes(r.name_en);
+            const ja = stripQuotes(r.name_ja);
+            if (key && (en || ja)) nameMap[key] = { en, ja };
           });
         } catch (err) {
           console.warn("units.csv를 읽지 못해 글자 로고를 사용합니다.", err);
@@ -1001,6 +1020,7 @@ export default function App() {
             groups.push({
               id: unit.name,
               name: unit.name,
+              names: nameMap[unit.name.toLowerCase()], // ← 추가
               logo:
                 logoMap[unit.name.toLowerCase()] ||
                 resolveAsset(unit.logo) ||
@@ -1015,9 +1035,9 @@ export default function App() {
                   id,
                   groupId: unit.name,
                   name: mName,
+                  names: { en: stripQuotes(r.name_en ?? ""), ja: stripQuotes(r.name_ja ?? "") },
                   img: resolveImg(stripQuotes(r.img), MEMBER_IMG_DIR) || fallback,
-                  fallback,
-                  names: { en: stripQuotes(r.name_en ?? ""), ja: stripQuotes(r.name_ja ?? "") }
+                  fallback
                 };
               })
             });
@@ -1025,6 +1045,7 @@ export default function App() {
           return {
             id: `agency-${aIdx}`,
             name: cfg.name,
+            names: nameMap[cfg.name.toLowerCase()], // ← 추가
             logo:
               logoMap[cfg.name.toLowerCase()] ||
               resolveAsset(cfg.logo) ||
@@ -1032,7 +1053,6 @@ export default function App() {
             groups
           };
         });
-
         setBaseAgencies(parsed);
       } catch (err) {
         console.error("CSV 로드 에러:", err);
@@ -1310,8 +1330,8 @@ export default function App() {
       if (validGroupIds.has(g)) clean[g] = m;
     });
     if (!shouldSendStats()) return;
-    // 마지막으로 보낸 내용과 같으면 건너뜀 (이미지를 여러 번 저장해도 서버 쓰기는 한 번)
-    const signature = JSON.stringify(Object.keys(clean).sort().map((k) => [k, clean[k]]));
+    // 마지막으로 보낸 내용(픽 + 언어)과 같으면 건너뜀 (이미지를 여러 번 저장해도 서버 쓰기는 한 번)
+    const signature = JSON.stringify([Object.keys(clean).sort().map((k) => [k, clean[k]]), lang]);
     try {
       if (window.localStorage.getItem("es_stats_sig") === signature) return;
     } catch {
@@ -1397,16 +1417,9 @@ export default function App() {
 
   // 내 선택 이미지 저장 (서버를 거치지 않음 · 닉네임은 선택 사항)
   const savePersonalImage = async () => {
-    if (!requireComplete()) return;
-    try {
-      await runSave(
-        () => renderPersonalBlob(agencies, picks, memberMap, trimmedName ? t("personalTitleNamed", { name: trimmedName }) : t("personalTitleDefault")),
-        `${safeFileName(trimmedName || "my")}_picks.png`,
-        30000
-      );
-    } catch (err) {
-      console.error("이미지 저장 에러:", err);
-      alert(t("alertImageFail"));
+    // 16개 전체 선택 대신 최소 1명 이상만 고르면 개인 이미지 저장 가능하게 변경할 경우:
+    if (pickedCount === 0) {
+      alert(t("alertPickAll", { total: totalGroups, picked: pickedCount }));
       return;
     }
     // 통계 전송은 이미지 저장이 끝난 뒤, 실패해도 저장에 영향이 없도록 따로 처리
@@ -1441,6 +1454,11 @@ export default function App() {
     }
     if (roomId && roomSource === "legacy") {
       alert(t("alertLegacyReadOnly"));
+      return;
+    }
+    // 이미 50명이 다 찬 방에는 기존 참여자 수정만 허용하고 신규 참여는 차단
+    if (roomId && !roomUsers[uid] && Object.keys(roomUsers).length >= MAX_USERS_PER_ROOM) {
+      alert(t("roomFullNote", { max: MAX_USERS_PER_ROOM }));
       return;
     }
     // 서버 시간 도입 전에 만든 예전 방의 내 기록은 수정할 수 없음 (보기만 가능)
