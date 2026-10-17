@@ -1,59 +1,61 @@
-﻿name,unit,shffle,ex_club,club,Yume_school,ES1,ES2,ex_unit,img
-"""텐쇼인 에이치""","""fine""",,,,,,,,eichi.webp
-"""히비키 와타루""","""fine""",,,,,,,,wataru.webp
-"""히메미야 토리""","""fine""",,,,,,,,tori.webp
-"""후시미 유즈루""","""fine""",,,,,,,,yuzuru.webp
-"""아케호시 스바루""","""Trickstar""",,,,,,,,subaru.webp
-"""히다카 호쿠토""","""Trickstar""",,,,,,,,hokuto.webp
-"""유우키 마코토""","""Trickstar""",,,,,,,,makoto.webp
-"""이사라 마오""","""Trickstar""",,,,,,,,mao.webp
-"""나구모 테토라""","""유성대""",,,,,,,,tetora.webp
-"""타카미네 미도리""","""유성대""",,,,,,,,midori.webp
-"""센고쿠 시노부""","""유성대""",,,,,,,,sinobu.webp
-"""모리사와 치아키""","""유성대""",,,,,,,,chiaki.webp
-"""신카이 카나타""","""유성대""",,,,,,,,kanata.webp
-"""아마기 히이로""","""ALKALOID""",,,,,,,,hiiro.webp
-"""시라토리 아이라""","""ALKALOID""",,,,,,,,aira.webp
-"""아야세 마요이""","""ALKALOID""",,,,,,,,mayoi.webp
-"""카제하야 타츠미""","""ALKALOID""",,,,,,,,tatsumi.webp
-"""란 나기사""","""Eden""",,,,,,,,nagisa.webp
-"""토모에 히요리""","""Eden""",,,,,,,,hiyori.webp
-"""사에구사 이바라""","""Eden""",,,,,,,,ibara.webp
-"""사자나미 쥰""","""Eden""",,,,,,,,jyun.webp
-"""이츠키 슈""","""Valkyrie""",,,,,,,,syu.webp
-"""카게히라 미카""","""Valkyrie""",,,,,,,,mika.webp
-"""아오이 히나타""","""2wink""",,,,,,,,hinata.webp
-"""아오이 유우타""","""2wink""",,,,,,,,yuuta.webp
-"""아마기 린네""","""Crazy:B""",,,,,,,,rinne.webp
-"""HiMERU""","""Crazy:B""",,,,,,,,himeru.webp
-"""시이나 니키""","""Crazy:B""",,,,,,,,niki.webp
-"""오오카와 코하쿠""","""Crazy:B""",,,,,,,,kohaku.webp
-"""사쿠마 레이""","""UNDEAD""",,,,,,,,rei.webp
-"""하카제 카오루""","""UNDEAD""",,,,,,,,kaoru.webp
-"""오토가리 아도니스""","""UNDEAD""",,,,,,,,adonis.webp
-"""오오가미 코가""","""UNDEAD""",,,,,,,,koga.webp
-"""니토 나즈나""","""Ra*bits""",,,,,,,,nazuna.webp
-"""마시로 토모야""","""Ra*bits""",,,,,,,,tomoya.webp
-"""시노 하지메""","""Ra*bits""",,,,,,,,hazime.webp
-"""텐마 미츠루""","""Ra*bits""",,,,,,,,mitsuru.webp
-"""하스미 케이토""","""홍월""",,,,,,,,keito.webp
-"""키류 쿠로""","""홍월""",,,,,,,,kuro.webp
-"""칸자키 소마""","""홍월""",,,,,,,,soma.webp
-"""타키 이부키""","""홍월""",,,,,,,,ibuki.webp
-"""코지카 쥬이스""","""MELLOW DEAR US""",,,,,,,,juis.webp
-"""마도카 노조미""","""MELLOW DEAR US""",,,,,,,,nozomi.webp
-"""쿠온 마슈""","""MELLOW DEAR US""",,,,,,,,masyu.webp
-"""츠즈라 치토세""","""MELLOW DEAR US""",,,,,,,,chitose.webp
-"""스오우 츠카사""","""Knights""",,,,,,,,tsukasa.webp
-"""츠키나가 레오""","""Knights""",,,,,,,,reo.webp
-"""세나 이즈미""","""Knights""",,,,,,,,izumi.webp
-"""사쿠마 리츠""","""Knights""",,,,,,,,ritsu.webp
-"""나루카미 아라시""","""Knights""",,,,,,,,arasi.webp
-"""사카사키 나츠메""","""Switch""",,,,,,,,natsume.webp
-"""아오바 츠무기""","""Switch""",,,,,,,,tsumugi.webp
-"""하루카와 소라""","""Switch""",,,,,,,,sora.webp
-"""미케지마 마다라""","""MaM""",,,,,,,,madara.webp
-"""에스""","""Special for Princess!""",,,,,,,,esu.webp
-"""칸나""","""Special for Princess!""",,,,,,,,kanna.webp
-"""유메""","""Special for Princess!""",,,,,,,,yume.webp
-"""라이카""","""Special for Princess!""",,,,,,,,raika.webp
+﻿name,unit,shffle,ex_club,club,Yume_school,ES1,ES2,ex_unit,img,name_en,name_ja
+"""텐쇼인 에이치""","""fine""",,,,,,,,eichi.webp,Tenshouin Eichi,天祥院英智
+"""히비키 와타루""","""fine""",,,,,,,,wataru.webp,Hibiki Wataru,日々樹渉
+"""히메미야 토리""","""fine""",,,,,,,,tori.webp,Himemiya Tori,姫宮桃李
+"""후시미 유즈루""","""fine""",,,,,,,,yuzuru.webp,Fushimi Yuzuru,伏見弓弦
+"""아케호시 스바루""","""Trickstar""",,,,,,,,subaru.webp,Akehoshi Subaru,明星スバル
+"""히다카 호쿠토""","""Trickstar""",,,,,,,,hokuto.webp,Hidaka Hokuto,氷鷹北斗
+"""유우키 마코토""","""Trickstar""",,,,,,,,makoto.webp,Yuuki Makoto,遊木真
+"""이사라 마오""","""Trickstar""",,,,,,,,mao.webp,Isara Mao,衣更真緒
+"""나구모 테토라""","""유성대""",,,,,,,,tetora.webp,Nagumo Tetora,南雲鉄虎
+"""타카미네 미도리""","""유성대""",,,,,,,,midori.webp,Takamine Midori,高峯翠
+"""센고쿠 시노부""","""유성대""",,,,,,,,sinobu.webp,Sengoku Shinobu,仙石忍
+"""모리사와 치아키""","""유성대""",,,,,,,,chiaki.webp,Morisawa Chiaki,守沢千秋
+"""신카이 카나타""","""유성대""",,,,,,,,kanata.webp,Shinkai Kanata,深海奏汰
+"""아마기 히이로""","""ALKALOID""",,,,,,,,hiiro.webp,Amagi Hiiro,天城一彩
+"""시라토리 아이라""","""ALKALOID""",,,,,,,,aira.webp,Shiratori Aira,白鳥藍良
+"""아야세 마요이""","""ALKALOID""",,,,,,,,mayoi.webp,Ayase Mayoi,礼瀬マヨイ
+"""카제하야 타츠미""","""ALKALOID""",,,,,,,,tatsumi.webp,Kazehaya Tatsumi,風早巽
+"""란 나기사""","""Eden""",,,,,,,,nagisa.webp,Ran Nagisa,乱凪砂
+"""토모에 히요리""","""Eden""",,,,,,,,hiyori.webp,Tomoe Hiyori,巴日和
+"""사에구사 이바라""","""Eden""",,,,,,,,ibara.webp,Saegusa Ibara,七種茨
+"""사자나미 쥰""","""Eden""",,,,,,,,jyun.webp,Sazanami Jun,漣ジュン
+"""이츠키 슈""","""Valkyrie""",,,,,,,,syu.webp,Itsuki Shu,斎宮宗
+"""카게히라 미카""","""Valkyrie""",,,,,,,,mika.webp,Kagehira Mika,影片みか
+"""아오이 히나타""","""2wink""",,,,,,,,hinata.webp,Aoi Hinata,葵ひなた
+"""아오이 유우타""","""2wink""",,,,,,,,yuuta.webp,Aoi Yuta,葵ゆうた
+"""아마기 린네""","""Crazy:B""",,,,,,,,rinne.webp,Amagi Rinne,天城燐音
+"""HiMERU""","""Crazy:B""",,,,,,,,himeru.webp,HiMERU,HiMERU
+"""시이나 니키""","""Crazy:B""",,,,,,,,niki.webp,Shiina Niki,椎名ニキ
+"""오우카와 코하쿠""","""Crazy:B""",,,,,,,,kohaku.webp,Oukawa Kohaku,桜河こはく
+"""사쿠마 레이""","""UNDEAD""",,,,,,,,rei.webp,Sakuma Rei,朔間零
+"""하카제 카오루""","""UNDEAD""",,,,,,,,kaoru.webp,Hakaze Kaoru,羽風薫
+"""오토가리 아도니스""","""UNDEAD""",,,,,,,,adonis.webp,Otogari Adonis,乙狩アドニス
+"""오오가미 코가""","""UNDEAD""",,,,,,,,koga.webp,Oogami Koga,大神晃牙
+"""니토 나즈나""","""Ra*bits""",,,,,,,,nazuna.webp,Nito Nazuna,仁兎なずな
+"""마시로 토모야""","""Ra*bits""",,,,,,,,tomoya.webp,Mashiro Tomoya,真白友也
+"""시노 하지메""","""Ra*bits""",,,,,,,,hazime.webp,Shino Hajime,紫之創
+"""텐마 미츠루""","""Ra*bits""",,,,,,,,mitsuru.webp,Tenma Mitsuru,天満光
+"""하스미 케이토""","""홍월""",,,,,,,,keito.webp,Hasumi Keito,蓮巳敬人
+"""키류 쿠로""","""홍월""",,,,,,,,kuro.webp,Kiryu Kuro,鬼龍紅郎
+"""칸자키 소마""","""홍월""",,,,,,,,soma.webp,Kanzaki Souma,神崎颯馬
+"""타키 이부키""","""홍월""",,,,,,,,ibuki.webp,Ibuki Taki,滝 維吹
+"""코지카 쥬이스""","""MELLOW DEAR US""",,,,,,,,juis.webp,Kojika Juis,小鹿 ジュイス
+"""마도카 노조미""","""MELLOW DEAR US""",,,,,,,,nozomi.webp,Madoka Nozomi,円果 望見
+"""쿠온 마슈""","""MELLOW DEAR US""",,,,,,,,masyu.webp,Kuon Mashu,久遠 舞珠
+"""츠즈라 치토세""","""MELLOW DEAR US""",,,,,,,,chitose.webp,Tsuzura Chitose,甘楽 チトセ
+"""스오우 츠카사""","""Knights""",,,,,,,,tsukasa.webp,Tsukasa Suou,朱桜司
+"""츠키나가 레오""","""Knights""",,,,,,,,reo.webp,Leo Tsukinaga,月永レオ
+"""세나 이즈미""","""Knights""",,,,,,,,izumi.webp,Izumi Sena,瀬名泉
+"""사쿠마 리츠""","""Knights""",,,,,,,,ritsu.webp,Ritsu Sakuma,朔間凛月
+"""나루카미 아라시""","""Knights""",,,,,,,,arasi.webp,Arashi Narukami,鳴上嵐
+"""사카사키 나츠메""","""Switch""",,,,,,,,natsume.webp,Natsume Sakasaki,逆先夏目
+"""아오바 츠무기""","""Switch""",,,,,,,,tsumugi.webp,Tsumugi Aoba,青葉つむぎ
+"""하루카와 소라""","""Switch""",,,,,,,,sora.webp,Sora Harukawa,春川宙
+"""미케지마 마다라""","""MaM""",,,,,,,,madara.webp,Madara Mikejima,三毛縞斑
+"""에스""","""Special for Princess!""",,,,,,,,esu.webp,Esu,エス
+"""칸나""","""Special for Princess!""",,,,,,,,kanna.webp,Kanna,カンナ
+"""유메""","""Special for Princess!""",,,,,,,,yume.webp,Yume,ユメ
+"""라이카""","""Special for Princess!""",,,,,,,,raika.webp,Raika,ライカ
+"""사가미 진""","""J&A""",,,,,,,,,Sagami Jin,佐賀美 陣
+"""쿠누기 아키오미""","""J&A""",,,,,,,,,Kunugi Akiomi,椚 章臣
