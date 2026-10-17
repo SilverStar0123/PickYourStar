@@ -301,8 +301,8 @@ export function sendAnonymousStats(
   });
   if (Object.keys(clean).length === 0) return;
   if (!shouldSendStats()) return;
-  // 마지막으로 보낸 내용(픽 + 언어)과 같으면 건너뜀 (이미지를 여러 번 저장해도 서버 쓰기는 한 번)
-  const signature = JSON.stringify([Object.keys(clean).sort().map((k) => [k, clean[k]]), lang]);
+  // 마지막으로 보낸 픽과 같으면 건너뜀 (이미지를 여러 번 저장하거나 언어만 바꿔도 서버 쓰기는 한 번)
+  const signature = JSON.stringify(Object.keys(clean).sort().map((k) => [k, clean[k]]));
   try {
     if (window.localStorage.getItem("es_stats_sig") === signature) return;
   } catch {

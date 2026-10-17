@@ -12,7 +12,7 @@ import "./styles.css";
 import "./lang.css";
 import { layoutLogos } from "./logoLayout";
 import { computeMatches } from "./matching";
-import { LANGS, LANG_LABEL, LANG_KEY, LOCALE, detectInitialLang, normalizeLang, translate } from "./i18n";
+import { LANGS, LANG_LABEL, LANG_KEY, LOCALE, detectInitialLang, translate } from "./i18n";
 import type { Lang, MsgKey } from "./i18n";
 import { auth, db } from "./firebaseClient";
 import {
@@ -100,13 +100,11 @@ export default function App() {
     document.title = translate(lang, "appTitle");
   }, [lang]);
 
-  // 주소에 ?lang= 이 실려 왔다면(앱 안 브라우저에서 넘어온 경우) 이 기기의 언어로 저장하고,
-  // 공유 링크에 언어가 섞이지 않도록 주소에서 지움
+  // 주소에 ?lang= 이 실려 왔다면(앱 안 브라우저에서 넘어온 경우) 이번 접속에서만 그 언어로 보여 주고
+  // (이 기기의 언어 설정으로 저장하지 않음), 공유 링크에 언어가 섞이지 않도록 주소에서만 지움
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     if (!sp.has("lang")) return;
-    const fromUrl = normalizeLang(sp.get("lang"));
-    if (fromUrl) saveLocal(LANG_KEY, fromUrl);
     sp.delete("lang");
     const qs = sp.toString();
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
