@@ -118,8 +118,18 @@ export default function SongQuiz({ agencies, lang, t }: SongQuizProps) {
   // 초보자 모드 (띄어쓰기/특수부호 무시 + 자동완성 보기)
   const [easyMode, setEasyMode] = useState<boolean>(true);
 
-  // 선택된 유닛 필터 (기본: 전체 유닛 선택)
-  const allUnits = useMemo(() => agencies.flatMap((a) => a.groups), [agencies]);
+  // 선택된 유닛 필터 (기본: 16개 정규 유닛 + songs.csv에 추가된 특별 카테고리(셔플 유닛, 합동곡 등) 자동 포함)
+  const allUnits = useMemo(() => {
+    const base = agencies.flatMap((a) => a.groups.map((g) => ({ id: g.id, name: g.name })));
+    const seen = new Set(base.map((u) => u.id));
+    songs.forEach((s) => {
+      if (s.unit && !seen.has(s.unit)) {
+        seen.add(s.unit);
+        base.push({ id: s.unit, name: s.unit });
+      }
+    });
+    return base;
+  }, [agencies, songs]);
   const unitNameMap = useMemo(() => {
     const m: Record<string, string> = {};
     allUnits.forEach((g) => {
@@ -129,11 +139,22 @@ export default function SongQuiz({ agencies, lang, t }: SongQuizProps) {
   }, [allUnits]);
 
   const [selectedUnits, setSelectedUnits] = useState<Set<string>>(() => new Set());
-  const unitsInitialized = useRef(false);
+  const knownUnitsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!unitsInitialized.current && allUnits.length > 0) {
-      unitsInitialized.current = true;
-      setSelectedUnits(new Set(allUnits.map((u) => u.id)));
+    if (allUnits.length === 0) return;
+    const added: string[] = [];
+    allUnits.forEach((u) => {
+      if (!knownUnitsRef.current.has(u.id)) {
+        knownUnitsRef.current.add(u.id);
+        added.push(u.id);
+      }
+    });
+    if (added.length > 0) {
+      setSelectedUnits((prev) => {
+        const next = new Set(Array.from(prev));
+        added.forEach((id) => next.add(id));
+        return next;
+      });
     }
   }, [allUnits]);
 
@@ -297,7 +318,6 @@ export default function SongQuiz({ agencies, lang, t }: SongQuizProps) {
     if (!currentSong || !filteredSongs.some((s) => s.id === currentSong.id)) {
       startNewQuestion(filteredSongs);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadingCsv, filteredSongs]);
 
   // YouTube IFrame Player 초기화
@@ -381,7 +401,6 @@ export default function SongQuiz({ agencies, lang, t }: SongQuizProps) {
       }
       playerRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 1초(또는 연장된 초) 재생 실행
