@@ -335,7 +335,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const listenCountedRef = useRef(false);
   const playReqRef = useRef(0); // 재생 요청 번호 (연속 클릭 시 마지막 요청만 실행)
   const loadedVideoIdRef = useRef<string>(""); // 플레이어에 실제로 올라가 있는 영상
-  // 정답 공개 화면에서 다음 곡을 같은 플레이어에 cue (음원 미리 다운로드는 하지 않음).
+  // 현재 문제의 비공개 준비 상태를 관리합니다. 정답 화면에서는 다음 문제를 cue하지 않습니다.
   const nextCuedRef = useRef<{ questionId: string; videoId: string; start: number } | null>(null);
 
   // 플레이어 상태
@@ -811,24 +811,9 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     void ensurePlayerAndPlay(currentSong.videoId, startSec, 1, true);
   }, [phase, currentSong?.id, status]);
 
-  // 정답/포기 화면에 머무르는 동안 다음 곡의 썸네일과 플레이어 상태를 미리 큐에 등록합니다.
-  // 두 번째 iframe은 만들지 않으며, cueVideoById는 실제 음원 데이터를 미리 받지 않습니다.
-  const cueFollowingQuestion = () => {
-    nextCuedRef.current = null;
-    const next = questionQueue[questionIdx + 1];
-    if (!next || !playerRef.current || !playerReadyRef.current) return;
-    const start = pickRandomStart(next);
-    try {
-      playerRef.current.pauseVideo?.();
-      playerRef.current.cueVideoById({ videoId: next.videoId, startSeconds: start });
-      loadedVideoIdRef.current = next.videoId;
-      nextCuedRef.current = { questionId: next.id, videoId: next.videoId, start };
-    } catch {
-      // 큐 준비가 실패해도 다음 문제에서 기존 loadVideoById 경로로 재생합니다.
-      nextCuedRef.current = null;
-      loadedVideoIdRef.current = "";
-    }
-  };
+  // 공개된 정답 화면에서는 현재 문제 영상만 보여줍니다.
+  // 이때 다음 곡을 cue하면 같은 YouTube iframe에 다음 곡 제목이 노출됩니다.
+  // 다음 문제는 화면 전환 후 비공개 상태에서 준비합니다.
 
   // 특정 문제 객체로 화면 상태 세팅
   const loadQuestionItem = (song: SongItem) => {
@@ -960,7 +945,6 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
 
     if (isCorrectGuess(value, currentSong)) {
       stopPlayerSafely();
-      cueFollowingQuestion();
       setStatus("correct");
       setHistory((prev) => [...prev, {
           song: currentSong,
@@ -986,7 +970,6 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const handleGiveUp = () => {
     if (!currentSong || status !== "playing") return;
     stopPlayerSafely();
-    cueFollowingQuestion();
     setStatus("giveup");
     setHistory((prev) => [...prev, { song: currentSong, correct: false, tries, clipSec: clipDuration, score: 0, listens: listenCount }]);
   };
