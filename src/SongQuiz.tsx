@@ -809,7 +809,6 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     if (phase !== "playing" || status !== "playing" || !currentSong) return;
     // 같은 곡을 다시 들을 때는 이 effect가 다시 실행되지 않습니다.
     void ensurePlayerAndPlay(currentSong.videoId, startSec, 1, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, currentSong?.id, status]);
 
   // 정답/포기 화면에 머무르는 동안 다음 곡의 썸네일과 플레이어 상태를 미리 큐에 등록합니다.
