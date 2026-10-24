@@ -17,6 +17,7 @@ import { saveQuizCompletion } from "./quizResults";
 import type { QuizPool } from "./quizResults";
 import { loadQuizPercentileData, calculateQuizPercentile } from "./quizPercentiles";
 import { getAcceptedAnswers, normalizeAnswer, isCorrectGuess } from "./quizAnswer";
+import { findQuizSongSuggestions } from "./quizSuggestions";
 export { normalizeAnswer, isCorrectGuess } from "./quizAnswer";
 import type { QuizPercentile } from "./quizPercentiles";
 import {
@@ -47,7 +48,6 @@ interface HistoryItem {
   correct: boolean;
   tries: number; // 정답 제출까지의 총 시도 횟수 (정답 포함)
   clipSec: number; // 정답/포기 시점에 설정돼 있던 듣기 길이(초)
-  hint: boolean; // 유닛 힌트를 봤는지
   score: number; // 이 문제의 점수 (0~100)
   listens: number; // 이 문제에서 구간을 재생한 총 횟수 (같은 구간 반복 포함)
 }
@@ -317,7 +317,6 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     }).catch((err) => console.warn("퀴즈 점수 저장 실패 (게임은 정상 진행):", err));
   }, [phase, status, history, questionQueue.length, easyMode]);
   const [wrongShake, setWrongShake] = useState(false);
-  const [showUnitHint, setShowUnitHint] = useState(false);
   const [guess, setGuess] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [listenCount, setListenCount] = useState(0); // 이 문제에서 들은 횟수
@@ -693,8 +692,8 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     setTries(0);
     setListenCount(0);
     setStatus("playing");
-    setShowUnitHint(false);
     setGuess("");
+    setActiveIdx(0);
     setShowSuggestions(false);
   };
 
@@ -811,13 +810,11 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
           correct: true,
           tries: nextTries,
           clipSec: clipDuration,
-          hint: showUnitHint,
           listens: listenCount,
           score: calcQuestionScore({
             correct: true,
             wrongCount: nextTries - 1,
             clipSec: clipDuration,
-            hint: showUnitHint,
             listens: listenCount
           })
         }]);
@@ -836,36 +833,27 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     setIsPlayingAudio(false);
     setLoadingAudio(false);
     setStatus("giveup");
-    setHistory((prev) => [...prev, { song: currentSong, correct: false, tries, clipSec: clipDuration, hint: showUnitHint, score: 0, listens: listenCount }]);
+    setHistory((prev) => [...prev, { song: currentSong, correct: false, tries, clipSec: clipDuration, score: 0, listens: listenCount }]);
   };
 
-  // 초보자 모드용 자동완성 후보 목록 (입력 전에는 전체 곡, 입력하면 일치하는 곡만 / 정확히 일치 → 앞부분 일치 → 포함 순)
+  // 모든 언어의 정규 유닛명 + 화면에 표시되는 카테고리명을 검색어로 사용한다.
+  const unitSearchLabels = useMemo(() => {
+    const labels: Record<string, string[]> = {};
+    quizBaseAgencies.forEach((agency) => agency.groups.forEach((g) => {
+      labels[g.id] = [g.id, g.name, g.names?.ko || "", g.names?.en || "", g.names?.ja || ""];
+    }));
+    allUnits.forEach((unit) => {
+      labels[unit.id] = [...(labels[unit.id] || []), unit.name];
+    });
+    return labels;
+  }, [quizBaseAgencies, allUnits]);
+
+  // 초보자 자동완성: 곡 제목 + 유닛 이름(영·한·일/원래 셔플 유닛 이름).
   const suggestions = useMemo(() => {
     if (!easyMode || status !== "playing") return [];
-    const q = normalizeAnswer(guess);
     const pool = filteredSongs.length > 0 ? filteredSongs : songs;
-    if (!q) {
-      return [...pool]
-        .sort((a, b) => primaryTitle(a, lang).localeCompare(primaryTitle(b, lang)))
-        .slice(0, 60);
-    }
-    const scored: { s: SongItem; rank: number }[] = [];
-    pool.forEach((s) => {
-      let best = 99;
-      getAcceptedAnswers(s).forEach((ans) => {
-        const n = normalizeAnswer(ans);
-        if (!n) return;
-        if (n === q) best = Math.min(best, 0);
-        else if (n.startsWith(q)) best = Math.min(best, 1);
-        else if (n.includes(q)) best = Math.min(best, 2);
-      });
-      if (best < 99) scored.push({ s, rank: best });
-    });
-    return scored
-      .sort((a, b) => a.rank - b.rank)
-      .map((x) => x.s)
-      .slice(0, 60);
-  }, [easyMode, status, guess, filteredSongs, songs, lang]);
+    return findQuizSongSuggestions(pool, guess, lang, unitSearchLabels);
+  }, [easyMode, status, guess, filteredSongs, songs, lang, unitSearchLabels]);
 
   // 현재 언어에 맞는 대표 곡 제목 표시 (중복 없는 다른 언어 제목 병기)
   const formatSongDisplay = (s: SongItem): string => {
@@ -1374,17 +1362,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
                 <button type="button" className="sq-pill" onClick={rerollSpot}>
                   {t("quizChangeSpot")}
                 </button>
-                {!showUnitHint && (
-                  <button type="button" className="sq-pill" onClick={() => setShowUnitHint(true)}>
-                    {t("quizShowUnitHint")}
-                  </button>
-                )}
               </div>
-              {showUnitHint && (
-                <p className="sq-hint-banner">
-                  {t("quizUnitHintText", { unit: unitNameMap[currentSong.unit] || currentSong.unit })}
-                </p>
-              )}
               {isInAppBrowser && (
                 <p className="sq-inapp-notice" role="note">{t("quizInAppBrowserNotice")}</p>
               )}
@@ -1415,12 +1393,13 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
                     aria-activedescendant={listOpen && suggestions[activeIdx] ? `sq-opt-${activeIdx}` : undefined}
                     onChange={(e) => {
                       setGuess(e.target.value);
+                      setActiveIdx(0);
                       setShowSuggestions(true);
                     }}
                     onFocus={() => setShowSuggestions(true)}
                     onBlur={() => setShowSuggestions(false)}
                     onKeyDown={onInputKeyDown}
-                    placeholder={t("quizInputPlaceholder")}
+                    placeholder={easyMode ? t("quizEasyInputPlaceholder") : t("quizInputPlaceholder")}
                   />
                   {listOpen && (
                     <ul id="sq-suggest" ref={listRef} role="listbox" className="sq-suggest" aria-label={t("quizSuggestionsLabel")}>
@@ -1438,7 +1417,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={() => submitSuggestion(s)}
                           >
-                            <span className="sq-sug-unit">{unitNameMap[s.unit] || s.unit}</span>
+                            <span className="sq-sug-unit">{formatFullUnitLabel(s)}</span>
                             <span className="sq-sug-title">{formatSongDisplay(s)}</span>
                           </li>
                         ))
