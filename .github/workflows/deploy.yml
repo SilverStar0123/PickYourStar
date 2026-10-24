@@ -26,6 +26,8 @@ jobs:
       - run: yarn build
         env:
           CI: false # 경고를 에러로 취급하지 않도록
+          REACT_APP_CSV_VERSION: ${{ github.sha }} # 배포마다 안정적인 CSV 캐시 버전
+          REACT_APP_QUIZ_SCORE_COLLECTION: 'false' # FIRESTORE 규칙 추가 후 true로 전환
       - uses: actions/upload-pages-artifact@v3
         with:
           path: build
