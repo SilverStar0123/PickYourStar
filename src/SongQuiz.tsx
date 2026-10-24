@@ -350,6 +350,12 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const localAudioRef = useRef<HTMLAudioElement | null>(null);
   const localPlayCleanupRef = useRef<(() => void) | null>(null);
   const localPlaybackStopRef = useRef<number | null>(null);
+  // 한 번 실패한 파일은 이 퀴즈 화면을 이용하는 동안 다시 요청하지 않습니다.
+  const failedAudioUrlsRef = useRef(new Set<string>());
+  const [failedAudioVersion, setFailedAudioVersion] = useState(0);
+  const usesHostedAudio = (song: SongItem | null): boolean =>
+    !!song?.audioUrl && !failedAudioUrlsRef.current.has(song.audioUrl);
+  const usingHostedAudio = usesHostedAudio(currentSong);
   const playerHostRef = useRef<HTMLDivElement>(null);
   const quizCardRef = useRef<HTMLDivElement>(null);
   const stopTimerRef = useRef<number | null>(null);
@@ -854,47 +860,79 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     });
   };
 
-  // 문제 풀이: 준비된 음원이 있으면 YouTube iframe을 아예 불러오지 않습니다.
-  // 정답 공개 시에만 원본 YouTube 영상을 해당 구간부터 보여줍니다.
+  // 자체 음원이 없거나 손상/차단/응답 지연으로 실패하면 같은 구간을 YouTube로 재생합니다.
+  // ref를 먼저 갱신하여 error 이벤트와 play() 실패가 겹쳐도 한 번만 전환합니다.
+  const fallbackToYouTube = (song: SongItem) => {
+    if (currentSongRef.current !== song || !usesHostedAudio(song)) return;
+    const resumePlayback = pendingPlayRef.current;
+    const targetStart = startSecRef.current;
+    const duration = clipDurationRef.current;
+    if (resumePlayback && listenCountedRef.current) {
+      // 실패한 재생을 대체하는 것이므로 듣기 횟수를 이중으로 차감하지 않습니다.
+      setListenCount((count) => Math.max(0, count - 1));
+    }
+    failedAudioUrlsRef.current.add(song.audioUrl!);
+    stopPlayerSafely();
+    setFailedAudioVersion((version) => version + 1);
+    setPlayerError(false);
+    setAutoplayBlocked(false);
+    // 준비 중 실패하면 소리를 내지 않고, 사용자가 듣기를 요청한 경우에만 자동 재생합니다.
+    if (resumePlayback) void ensurePlayerAndPlay(song.videoId, targetStart, duration);
+  };
+
+  // 자체 음원을 먼저 준비합니다. 실패 시 다음 effect가 YouTube 준비를 이어받습니다.
   useEffect(() => {
-    if (phase !== "playing" || status !== "playing" || !currentSong?.audioUrl) return;
+    if (phase !== "playing" || status !== "playing" || !currentSong || !usingHostedAudio) return;
+    const song = currentSong;
     const audio = new Audio();
     audio.preload = "auto";
     localAudioRef.current = audio;
     let disposed = false;
+    let prepareTimer: number | null = null;
+    const clearPrepareTimer = () => {
+      if (prepareTimer !== null) window.clearTimeout(prepareTimer);
+      prepareTimer = null;
+    };
     setPreparingAudio(true);
     const ready = () => {
       if (!disposed) {
+        clearPrepareTimer();
         setPreparingAudio(false);
         setPlayerError(false);
       }
     };
     const failed = () => {
       if (!disposed) {
-        setPreparingAudio(false);
-        setLoadingAudio(false);
-        setPlayerError(true);
+        clearPrepareTimer();
+        fallbackToYouTube(song);
       }
     };
     audio.addEventListener("canplay", ready);
     audio.addEventListener("error", failed);
-    audio.src = currentSong.audioUrl;
-    audio.load();
+    prepareTimer = window.setTimeout(failed, 8000);
+    try {
+      audio.src = song.audioUrl!;
+      audio.load();
+    } catch {
+      failed();
+    }
     return () => {
       disposed = true;
+      clearPrepareTimer();
       clearLocalPlayback();
       audio.removeEventListener("canplay", ready);
       audio.removeEventListener("error", failed);
       audio.removeAttribute("src");
+      audio.load(); // 진행 중인 다운로드도 중지
       if (localAudioRef.current === audio) localAudioRef.current = null;
     };
-  }, [phase, currentSong?.id, status]);
+  }, [phase, currentSong?.id, status, usingHostedAudio]);
 
-  // YouTube 원본만 사용하는 기존 곡에 대한 사전 준비 동작입니다.
   useEffect(() => {
-    if (phase !== "playing" || status !== "playing" || !currentSong || currentSong.audioUrl) return;
-    void ensurePlayerAndPlay(currentSong.videoId, startSec, 1, true);
-  }, [phase, currentSong?.id, status]);
+    if (phase !== "playing" || status !== "playing" || !currentSong || usingHostedAudio) return;
+    // 전환 함수에서 이미 재생을 시작했다면 cue로 덮어쓰지 않습니다.
+    if (!pendingPlayRef.current) void ensurePlayerAndPlay(currentSong.videoId, startSec, 1, true);
+  }, [phase, currentSong?.id, status, usingHostedAudio, failedAudioVersion]);
 
   // 공개된 정답 화면에서는 현재 문제 영상만 보여줍니다.
   // 이때 다음 곡을 cue하면 같은 YouTube iframe에 다음 곡 제목이 노출됩니다.
@@ -902,11 +940,11 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
 
   // 특정 문제 객체로 화면 상태 세팅
   const loadQuestionItem = (song: SongItem) => {
-    const priorWasHostedAudio = !!currentSongRef.current?.audioUrl;
+    const priorWasHostedAudio = usesHostedAudio(currentSongRef.current);
     stopPlayerSafely();
     // 자체 음원 문제에 이전 YouTube player를 남기지 않고,
     // 자체 음원 -> 원본 YouTube 문제로 넘어갈 때 낡은 player 참조도 제거합니다.
-    if (song.audioUrl || priorWasHostedAudio) {
+    if (usesHostedAudio(song) || priorWasHostedAudio) {
       try { playerRef.current?.destroy?.(); } catch { /* ignore */ }
       playerRef.current = null;
       playerReadyRef.current = false;
@@ -981,13 +1019,21 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   // 광고/YouTube 플레이어는 문제 풀이 화면에서 사용하지 않습니다.
   const playLocalSnippet = (targetStart: number, duration: number) => {
     const audio = localAudioRef.current;
+    const song = currentSongRef.current;
+    if (!song) return;
     if (!audio) {
-      setPlayerError(true);
+      pendingPlayRef.current = true;
+      listenCountedRef.current = false;
+      startSecRef.current = targetStart;
+      clipDurationRef.current = duration;
+      fallbackToYouTube(song);
       return;
     }
     clearLocalPlayback();
     clearTimers();
     const requestId = ++playReqRef.current;
+    startSecRef.current = targetStart;
+    clipDurationRef.current = duration;
     pendingPlayRef.current = true;
     listenCountedRef.current = false;
     setAutoplayBlocked(false);
@@ -997,6 +1043,10 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     const finishAt = targetStart + duration;
 
     const clean = () => {
+      if (loadWatchdogRef.current !== null) {
+        window.clearTimeout(loadWatchdogRef.current);
+        loadWatchdogRef.current = null;
+      }
       if (localPlaybackStopRef.current !== null) {
         window.clearInterval(localPlaybackStopRef.current);
         localPlaybackStopRef.current = null;
@@ -1017,19 +1067,27 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     };
     const fail = () => {
       if (requestId !== playReqRef.current) return;
-      finish();
-      setPlayerError(true);
+      fallbackToYouTube(song);
+    };
+    const armWatchdog = () => {
+      if (loadWatchdogRef.current !== null) window.clearTimeout(loadWatchdogRef.current);
+      loadWatchdogRef.current = window.setTimeout(fail, 8000);
     };
     const onWaiting = () => {
       if (requestId === playReqRef.current) {
         setLoadingAudio(true);
         setIsPlayingAudio(false);
+        armWatchdog();
       }
     };
     const onPlaying = () => {
       if (requestId !== playReqRef.current) {
         audio.pause();
         return;
+      }
+      if (loadWatchdogRef.current !== null) {
+        window.clearTimeout(loadWatchdogRef.current);
+        loadWatchdogRef.current = null;
       }
       if (!listenCountedRef.current) {
         listenCountedRef.current = true;
@@ -1050,6 +1108,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     audio.addEventListener("ended", finish);
     audio.addEventListener("error", fail);
     localPlayCleanupRef.current = clean;
+    armWatchdog();
     try {
       audio.currentTime = targetStart;
       void audio.play().catch(fail);
@@ -1069,7 +1128,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     const dur = overrideSec ?? clipDuration;
     let targetStart = overrideStart ?? startSec;
 
-    if (targetSong.audioUrl) {
+    if (usesHostedAudio(targetSong)) {
       playLocalSnippet(targetStart, dur);
       return;
     }
@@ -1105,7 +1164,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   // 다른 1초 구간 뽑기
   const rerollSpot = () => {
     if (pendingPlayRef.current || !currentSong) return;
-    const totalDur = currentSong.audioUrl
+    const totalDur = usesHostedAudio(currentSong)
       ? Number(localAudioRef.current?.duration || 0)
       : playerRef.current && playerReadyRef.current && loadedVideoIdRef.current === currentSong.videoId
         ? Number(playerRef.current?.getDuration?.() || 0)
@@ -1611,7 +1670,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
         {/* 정답/포기 후에만 크게 보이는 영상 */}
         <div className={`sq-video${revealed ? " is-on" : ""}`}>
           <div className="sq-video-frame">
-            {revealed && currentSong?.audioUrl ? (
+            {revealed && currentSong && usingHostedAudio ? (
               // 정답 공개 후에만 iframe 생성. 그 전에는 영상 제목도 로드되지 않습니다.
               <iframe
                 key={currentSong.id}
