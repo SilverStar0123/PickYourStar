@@ -8,6 +8,8 @@ export default function ImagePreviewModal({
   onClose,
   onShare,
   onOpenExternal,
+  onOpenTweet,
+  onSaveImage,
   onCopyUrl
 }: {
   preview: { src: string; blob: Blob; name: string };
@@ -15,6 +17,8 @@ export default function ImagePreviewModal({
   onClose: () => void;
   onShare: () => void;
   onOpenExternal?: () => void; // 없으면 버튼을 숨김
+  onOpenTweet?: () => void; // 브라우저가 PNG 자동 첨부를 지원하지 않을 때 X 글쓰기
+  onSaveImage?: () => void;
   onCopyUrl: () => void;
 }) {
   return (
@@ -32,6 +36,16 @@ export default function ImagePreviewModal({
                 {t("previewShare")}
               </button>
             )}
+          {onSaveImage && (
+            <button type="button" className="download-btn" onClick={onSaveImage}>
+              {t("quizShareSaveImage")}
+            </button>
+          )}
+          {onOpenTweet && (
+            <button type="button" className="download-btn" onClick={onOpenTweet}>
+              {t("quizShareOpenX")}
+            </button>
+          )}
           {onOpenExternal && (
             <button type="button" className="download-btn" onClick={onOpenExternal}>
               {t("previewOpenExternal")}
@@ -41,6 +55,7 @@ export default function ImagePreviewModal({
             {t("previewCopyUrl")}
           </button>
         </div>
+        {onOpenTweet && <p className="preview-guide">{t("quizShareManualAttach")}</p>}
         <img src={preview.src} alt={t("previewImgAlt")} />
         <p className="preview-sub">{t("previewSub")}</p>
         <button type="button" className="download-btn" onClick={onClose}>
