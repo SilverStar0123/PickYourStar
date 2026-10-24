@@ -364,6 +364,18 @@
   margin-top: 22px;
   text-align: center;
 }
+/* 인앱 브라우저 안내: 플레이어 차단 가능성을 설명하되 버튼 사용을 가리지 않음 */
+.sq-inapp-notice {
+  margin: 0 0 14px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: rgba(247, 184, 75, 0.12);
+  border: 1px solid rgba(187, 132, 37, 0.34);
+  font-size: 0.86rem;
+  line-height: 1.6;
+  text-align: left;
+}
+
 .sq-play-btn {
   display: inline-flex;
   align-items: center;

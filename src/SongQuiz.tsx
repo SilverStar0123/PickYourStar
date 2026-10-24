@@ -346,6 +346,9 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [loadingAudio, setLoadingAudio] = useState(false);
   const [playerError, setPlayerError] = useState(false);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  // X(트위터) 등 인앱 브라우저는 YouTube iframe 소리 재생을 제한할 수 있습니다.
+  const isInAppBrowser = typeof navigator !== "undefined" && IN_APP_BROWSER.test(navigator.userAgent);
 
   // songs.csv의 unit이 정규 16개 유닛 중 하나가 아니라면 셔플곡으로 자동 분류.
   // 서로 다른 정규 유닛이 합쳐진 이름(&, ×, VS 등)은 퓨전곡으로 분류한다.
@@ -494,6 +497,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     listenCountedRef.current = false; // 이 요청에서 실제로 재생이 시작되면 한 번만 횟수에 더함
     clearTimers();
     setPlayerError(false);
+    setAutoplayBlocked(false);
     clipDurationRef.current = durSec;
     startSecRef.current = targetStart;
     pendingPlayRef.current = true;
@@ -501,8 +505,15 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     setLoadingAudio(true);
 
     loadWatchdogRef.current = window.setTimeout(() => {
+      if (reqId !== playReqRef.current || !pendingPlayRef.current) return;
+      // 준비는 됐지만 인앱 브라우저에서 실제 PLAYING 이벤트가 오지 않을 수도 있습니다.
+      // 무한 로딩을 끝내고 다시 눌러 보거나 외부 브라우저로 열도록 안내합니다.
+      clearTimers();
+      playReqRef.current += 1; // 시간이 지난 비동기 요청이 나중에 재생하지 못하도록 무효화
+      pendingPlayRef.current = false;
       setLoadingAudio(false);
-      // 8초가 지나도 플레이어가 준비되지 않으면 정리해서 다음 클릭 때 새로 만들 수 있게 함
+      setIsPlayingAudio(false);
+      setPlayerError(true);
       if (playerRef.current && !playerReadyRef.current) {
         try {
           playerRef.current.destroy?.();
@@ -510,8 +521,6 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
           /* ignore */
         }
         playerRef.current = null;
-        pendingPlayRef.current = false;
-        setPlayerError(true);
       }
     }, 8000);
 
@@ -565,7 +574,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       height: "100%",
       videoId,
       playerVars: {
-        autoplay: 1,
+        autoplay: 0, // 준비되기 전 자동 재생 시도를 줄이고 사용자 버튼을 우선합니다.
         playsinline: 1,
         controls: 1,
         rel: 0,
@@ -603,6 +612,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
             setLoadingAudio(false);
             setIsPlayingAudio(true);
             setPlayerError(false);
+            setAutoplayBlocked(false);
 
             if (pendingPlayRef.current) {
               if (stopTimerRef.current !== null) {
@@ -639,8 +649,19 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
             }
           }
         },
+        onAutoplayBlocked: () => {
+          // YouTube API 공식 이벤트: 브라우저가 스크립트 재생을 차단한 경우
+          if (!pendingPlayRef.current || listenCountedRef.current) return;
+          clearTimers();
+          pendingPlayRef.current = false;
+          setIsPlayingAudio(false);
+          setLoadingAudio(false);
+          setAutoplayBlocked(true);
+          setPlayerError(true);
+        },
         onError: () => {
           clearTimers();
+          setAutoplayBlocked(false);
           pendingPlayRef.current = false;
           setIsPlayingAudio(false);
           setLoadingAudio(false);
@@ -662,6 +683,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const loadQuestionItem = (song: SongItem) => {
     stopPlayerSafely();
     setPlayerError(false);
+    setAutoplayBlocked(false);
     const initialStart = pickRandomStart(song);
     currentSongRef.current = song;
     setCurrentSong(song);
@@ -1342,7 +1364,14 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
                   {t("quizUnitHintText", { unit: unitNameMap[currentSong.unit] || currentSong.unit })}
                 </p>
               )}
-              {playerError && <p className="sq-alert">{t("quizPlayerError")}</p>}
+              {isInAppBrowser && (
+                <p className="sq-inapp-notice" role="note">{t("quizInAppBrowserNotice")}</p>
+              )}
+              {playerError && (
+                <p className="sq-alert" role="alert">
+                  {autoplayBlocked ? t("quizPlaybackBlocked") : isInAppBrowser ? t("quizInAppPlaybackError") : t("quizPlayerError")}
+                </p>
+              )}
             </div>
 
             <div className="sq-answer">
