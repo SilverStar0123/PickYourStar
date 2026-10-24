@@ -571,24 +571,32 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       }
     }
 
-    const el = document.createElement("div");
+    // YouTube 공식 개인정보 보호 강화 모드: iframe URL의 도메인을 직접 지정합니다.
+    // 광고 제거 기능은 아니며, IFrame API는 계속 공식 API를 사용합니다.
+    // 별도 iframe을 만들면 YT.Player의 비공식 host 옵션에 의존하지 않아도 됩니다.
+    const iframe = document.createElement("iframe");
+    const params = new URLSearchParams({
+      enablejsapi: "1",
+      origin: window.location.origin,
+      playsinline: "1",
+      controls: "1",
+      rel: "0",
+      autoplay: "0",
+      start: String(Math.floor(targetStart))
+    });
+    iframe.src = `https://www.youtube-nocookie.com/embed/${videoId}?${params.toString()}`;
+    iframe.title = "YouTube video player";
+    iframe.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture; fullscreen");
+    iframe.setAttribute("allowfullscreen", "");
+    iframe.setAttribute("frameborder", "0");
+    iframe.style.width = "100%";
+    iframe.style.height = "100%";
+
     playerHostRef.current.innerHTML = "";
-    playerHostRef.current.appendChild(el);
+    playerHostRef.current.appendChild(iframe);
     loadedVideoIdRef.current = videoId;
 
-    playerRef.current = new YT.Player(el, {
-      width: "100%",
-      height: "100%",
-      videoId,
-      playerVars: {
-        autoplay: 0, // 준비되기 전 자동 재생 시도를 줄이고 사용자 버튼을 우선합니다.
-        playsinline: 1,
-        controls: 1,
-        rel: 0,
-        modestbranding: 1,
-        origin: window.location.origin,
-        start: Math.floor(targetStart)
-      },
+    playerRef.current = new YT.Player(iframe, {
       events: {
         onReady: (event: any) => {
           playerReadyRef.current = true;
@@ -599,7 +607,8 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
               loadedVideoIdRef.current = wanted;
               event.target.loadVideoById({ videoId: wanted, startSeconds: startSecRef.current });
             } else {
-              event.target.seekTo(startSecRef.current, true);
+              // iframe URL의 start 매개변수로 초기 구간을 지정했으므로
+              // 최초 준비 직후 중복 seekTo 요청 없이 한 번만 재생합니다.
               event.target.playVideo();
             }
           } catch {
@@ -608,6 +617,14 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
         },
         onStateChange: (event: any) => {
           if (event.data === 1) {
+            // 재생 요청이 이미 취소됐거나 끝났으면 늦게 도착한 PLAYING을 즉시 중지합니다.
+            // 광고·버퍼링 후 뒤늦게 재개되어 1초 이상 재생되는 상황을 줄이기 위함입니다.
+            if (!pendingPlayRef.current) {
+              try { event.target?.pauseVideo?.(); } catch { /* ignore */ }
+              setIsPlayingAudio(false);
+              setLoadingAudio(false);
+              return;
+            }
             if (pendingPlayRef.current && !listenCountedRef.current) {
               listenCountedRef.current = true;
               setListenCount((c) => c + 1);
