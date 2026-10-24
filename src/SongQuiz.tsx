@@ -947,6 +947,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   // ───────── 결과 공유 (이미지 저장 · X 글쓰기 · 링크 복사) ─────────
   const [challenge, setChallenge] = useState<QuizResultInfo | null>(() => parseQuizChallenge(window.location.hash));
   const [sharePreview, setSharePreview] = useState<{ src: string; blob: Blob; name: string } | null>(null);
+  const [previewForX, setPreviewForX] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<number | null>(null);
@@ -1014,6 +1015,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const tweetUrl = buildTweetIntentUrl({ text: tweetText, url: shareUrl, hashtags: QUIZ_SHARE_HASHTAGS });
   const canNativeShare =
     phase === "summary" &&
+    typeof navigator.share === "function" &&
     typeof navigator.canShare === "function" &&
     (() => {
       try {
@@ -1032,6 +1034,22 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     return b;
   };
 
+  // 브라우저에서 파일을 자동 첨부할 수 없을 때 PNG 미리보기와 X 글쓰기 링크를 제공.
+  // X Web Intent는 이미지 첨부를 지원하지 않으므로 이 경로에서는 사용자가 PNG를 직접 첨부합니다.
+  const showImagePreview = async (forX: boolean) => {
+    if (shareBusy) return;
+    setShareBusy(true);
+    try {
+      const blob = await withTimeout(makeResultBlob(), 15000);
+      setPreviewForX(forX);
+      setSharePreview({ src: await blobToDataUrl(blob), blob, name: "song-quiz-result.png" });
+    } catch {
+      alert(t("quizShareImageFail"));
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
   // 결과 이미지 저장 (앱 안 브라우저처럼 다운로드가 막힌 곳이면 미리보기 창)
   const handleSaveResultImage = async () => {
     if (shareBusy) return;
@@ -1040,6 +1058,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       const blob = await withTimeout(makeResultBlob(), 15000);
       const name = "song-quiz-result.png";
       if (!IN_APP_BROWSER.test(navigator.userAgent) && triggerDownload(blob, name)) return;
+      setPreviewForX(false);
       setSharePreview({ src: await blobToDataUrl(blob), blob, name });
     } catch {
       alert(t("quizShareImageFail"));
@@ -1063,30 +1082,31 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     copiedTimerRef.current = window.setTimeout(() => setCopied(false), 2000);
   };
 
-  // 휴대폰의 공유 창으로 이미지와 글을 함께 보냄 (X 앱 등을 고를 수 있음)
+  // X 앱을 포함한 모바일 공유 메뉴에 PNG + 텍스트 + 링크를 같이 전달.
+  // X가 공유 항목 중 텍스트를 무시하는 기기도 있으므로 자동 첨부를 보장하지 않습니다.
   const shareFile = async (blob: Blob) => {
     try {
       await navigator.share({
         files: [new File([blob], "song-quiz-result.png", { type: "image/png" })],
-        text: buildQuizNativeShareText(tweetText),
-        url: shareUrl
+        text: `${buildQuizNativeShareText(tweetText)}\n${shareUrl}`
       });
     } catch (e) {
-      if ((e as Error)?.name !== "AbortError") alert(t("quizShareFailed"));
+      if ((e as Error)?.name !== "AbortError") {
+        // 공유를 거부하는 기기에서는 이미지를 보며 직접 저장·첨부할 수 있도록 전환.
+        void showImagePreview(true);
+      }
     }
   };
-  const handleNativeShare = async () => {
-    if (resultBlobRef.current) {
-      await shareFile(resultBlobRef.current);
-      return;
-    }
-    setShareBusy(true);
-    try {
-      await shareFile(await makeResultBlob());
-    } catch {
-      alert(t("quizShareImageFail"));
-    } finally {
-      setShareBusy(false);
+
+  // X 공유를 누르면 모바일에서는 이미지 파일 공유를 우선 시도.
+  // 공유창은 사용자 터치 직후 열어야 하므로 미리 준비해 둔 Blob을 즉시 사용합니다.
+  const handleShareToX = () => {
+    if (shareBusy) return;
+    const blob = resultBlobRef.current;
+    if (canNativeShare && blob) {
+      void shareFile(blob);
+    } else {
+      void showImagePreview(true);
     }
   };
 
@@ -1585,23 +1605,18 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
           <div className="sq-share">
             <h3 className="sq-label">{t("quizShareHeading")}</h3>
             <div className="sq-share-grid">
-              <a className="sq-share-btn sq-share-x" href={tweetUrl} target="_blank" rel="noopener noreferrer">
+              <button type="button" className="sq-share-btn sq-share-x" disabled={shareBusy} onClick={handleShareToX}>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z" />
                 </svg>
                 {t("quizShareX")}
-              </a>
+              </button>
               <button type="button" className="sq-share-btn" disabled={shareBusy} onClick={handleSaveResultImage}>
                 {t("quizShareSaveImage")}
               </button>
               <button type="button" className="sq-share-btn" onClick={() => handleCopyLink()}>
                 {copied ? t("quizShareCopied") : t("quizShareCopyLink")}
               </button>
-              {canNativeShare && (
-                <button type="button" className="sq-share-btn sq-share-wide" disabled={shareBusy} onClick={handleNativeShare}>
-                  {t("quizShareNative")}
-                </button>
-              )}
             </div>
             <p className="sq-share-note">{t("quizShareImageHint")}</p>
           </div>
@@ -1623,6 +1638,8 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
           t={t}
           onClose={() => setSharePreview(null)}
           onShare={() => shareFile(sharePreview.blob)}
+          onOpenTweet={previewForX ? () => { window.open(tweetUrl, "_blank", "noopener,noreferrer"); } : undefined}
+          onSaveImage={previewForX ? () => { triggerDownload(sharePreview.blob, sharePreview.name); } : undefined}
           onCopyUrl={() => handleCopyLink(true)}
         />
       )}
