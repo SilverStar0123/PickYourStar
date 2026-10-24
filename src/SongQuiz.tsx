@@ -350,6 +350,9 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const stopTimerRef = useRef<number | null>(null);
   const loadWatchdogRef = useRef<number | null>(null);
   const pendingPlayRef = useRef(false);
+  // 정답/포기 화면의 YouTube 영상은 퀴즈용 시간 제한 없이 재생할 수 있습니다.
+  // onStateChange 콜백은 플레이어 생성 시 등록되므로 최신 값을 ref로 읽습니다.
+  const revealedPlaybackRef = useRef(false);
   // 각 문제를 시작하자마자 YouTube 플레이어를 큐에 올려 놓습니다.
   // cueVideoById는 음원을 미리 다운로드하거나 광고를 없애는 기능이 아닙니다.
   const primeRequestRef = useRef<{ questionId: string; videoId: string; start: number } | null>(null);
@@ -491,6 +494,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   };
 
   const stopPlayerSafely = () => {
+    revealedPlaybackRef.current = false;
     clearTimers();
     clearPrimeTimeout();
     playReqRef.current += 1; // 이전 비동기 재생 요청 무효화
@@ -716,6 +720,15 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
         },
         onStateChange: (event: any) => {
           if (event.data === 1) {
+            // 정답 공개 후에는 플레이어의 재생 버튼으로 전곡을 자유롭게 들을 수 있습니다.
+            // 문제 풀이의 1초 타이머/재생 횟수와 완전히 분리합니다.
+            if (revealedPlaybackRef.current) {
+              clearTimers();
+              pendingPlayRef.current = false;
+              setLoadingAudio(false);
+              setIsPlayingAudio(false);
+              return;
+            }
             // 재생 요청이 이미 취소됐거나 끝났으면 늦게 도착한 PLAYING을 즉시 중지합니다.
             // 광고·버퍼링 후 뒤늦게 재개되어 1초 이상 재생되는 상황을 줄이기 위함입니다.
             if (!pendingPlayRef.current) {
@@ -949,6 +962,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
 
     if (isCorrectGuess(value, currentSong)) {
       stopPlayerSafely();
+      revealedPlaybackRef.current = true;
       setStatus("correct");
       setHistory((prev) => [...prev, {
           song: currentSong,
@@ -974,6 +988,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const handleGiveUp = () => {
     if (!currentSong || status !== "playing") return;
     stopPlayerSafely();
+    revealedPlaybackRef.current = true;
     setStatus("giveup");
     setHistory((prev) => [...prev, { song: currentSong, correct: false, tries, clipSec: clipDuration, score: 0, listens: listenCount }]);
   };
