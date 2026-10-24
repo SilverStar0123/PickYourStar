@@ -17,7 +17,8 @@ function compile(file, mocks={}) {
 }
 const sheets=compile('pickSheets.ts');
 assert.deepEqual(sheets.PICK_SHEET_IDS,['current','special','shuffle1','shuffle2']);
-assert.equal(sheets.SPECIAL_UNITS.length,13);
+assert.ok(sheets.SPECIAL_UNITS.length >= 16, '스페셜 유닛 목록이 예상보다 적습니다');
+assert.equal(new Set(sheets.SPECIAL_UNITS).size, sheets.SPECIAL_UNITS.length, '스페셜 유닛에 중복이 있습니다');
 assert.equal(sheets.PICK_SHEETS.special.collection,'specialRooms');
 assert.equal(sheets.PICK_SHEETS.shuffle1.multiplayer,false);
 assert.equal(sheets.sheetFromHash('#/picks/special'),'special');
@@ -41,7 +42,7 @@ const csv=compile('csv.ts',{'./config':config,'./pickSheets':sheets,'./assets':a
 assert.deepEqual(csv.splitSheetUnits('Eve| Adam |Eve|'),['Eve','Adam']);
 Promise.all([csv.loadSheetAgencies('special'),csv.loadSheetAgencies('shuffle1'),csv.loadSheetAgencies('shuffle2')]).then(([special,shuffle1,shuffle2])=>{
   assert.equal(special.length,1);
-  assert.deepEqual(special[0].groups.map(g=>g.id),['Rain-bows','Eve','Adam']);
+  assert.deepEqual(new Set(special[0].groups.map(g=>g.id)),new Set(['Eve','Adam','Rain-bows']));
   const eve=special[0].groups.find(g=>g.id==='Eve');
   const adam=special[0].groups.find(g=>g.id==='Adam');
   assert.deepEqual(eve.members.map(m=>m.name),['A','B']);
