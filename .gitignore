@@ -1,0 +1,10 @@
+# 개발 및 빌드 파일
+node_modules/
+build/
+.env
+.env.*
+!.env.example
+# Firebase Admin 비밀키는 GitHub에 올리면 안 됩니다.
+serviceAccount*.json
+*firebase-adminsdk*.json
+.firebase/
