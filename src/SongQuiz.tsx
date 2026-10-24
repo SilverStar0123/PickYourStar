@@ -21,6 +21,7 @@ export { normalizeAnswer, isCorrectGuess } from "./quizAnswer";
 import type { QuizPercentile } from "./quizPercentiles";
 import {
   QUIZ_SHARE_HASHTAGS,
+  buildQuizNativeShareText,
   buildQuizShareUrl,
   buildTweetIntentUrl,
   parseQuizChallenge,
@@ -1067,7 +1068,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     try {
       await navigator.share({
         files: [new File([blob], "song-quiz-result.png", { type: "image/png" })],
-        text: tweetText,
+        text: buildQuizNativeShareText(tweetText),
         url: shareUrl
       });
     } catch (e) {

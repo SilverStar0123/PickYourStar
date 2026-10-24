@@ -8,8 +8,14 @@ export interface QuizResultInfo {
   score?: number; // 최종 점수 (0~100). 예전 링크에는 없을 수 있음
 }
 
-// X 글에 자동으로 붙일 해시태그 ("#" 없이). 비워 두면 붙이지 않습니다. 예: ["앙스타"]
-export const QUIZ_SHARE_HASHTAGS: string[] = [];
+// X 게시글에 자동으로 붙일 해시태그 ("#" 없이). X 공유 버튼과 모바일 기본 공유에서 공통 사용합니다.
+export const QUIZ_SHARE_HASHTAGS: string[] = ["앙스타1초노래맞추기"];
+
+// 휴대폰 공유 메뉴(X 앱 선택 포함)는 Web Intent의 hashtags 파라미터를 사용하지 않으므로 본문에 직접 덧붙입니다.
+export function buildQuizNativeShareText(text: string): string {
+  const tags = QUIZ_SHARE_HASHTAGS.map((tag) => `#${tag}`).join(" ");
+  return tags ? `${text}\n\n${tags}` : text;
+}
 
 // 공유 링크: 기록이 주소(#/quiz?r=맞힌수-문제수-모드[-점수])에 담김. 받은 사람은 설정 화면에서 안내 문구를 봄
 export function buildQuizShareUrl(r: QuizResultInfo): string {
