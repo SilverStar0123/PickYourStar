@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>페이지 이동 중</title>
+  <script>
+    // GitHub Pages는 /quiz를 직접 요청하면 index.html 대신 404.html을 반환함.
+    // 현재 저장소의 루트 주소로 돌아가 해시 라우트(#/quiz)를 열어 줌.
+    // /저장소명/quiz 및 개인 도메인 /quiz 경로 모두 대응.
+    (function () {
+      var path = window.location.pathname;
+      var match = path.match(/^(.*\/)(?:quiz|songquiz)\/?$/i);
+      if (!match) return;
+      var hash = /^#\/quiz(?:\?|$)/i.test(window.location.hash)
+        ? window.location.hash
+        : "#/quiz";
+      window.location.replace(window.location.origin + match[1] + window.location.search + hash);
+    })();
+  </script>
+</head>
+<body>
+  <p>페이지를 열 수 없습니다. <a href="./">메인 페이지로 이동</a></p>
+</body>
+</html>
