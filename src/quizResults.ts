@@ -1,5 +1,5 @@
-// 한 판이 끝났을 때만 Firestore에 최종 점수 1문서 저장. 기본값은 OFF:
-// Firebase 콘솔에 퀴즈 규칙을 먼저 추가한 다음 GitHub Actions의 플래그를 true로 바꾸세요.
+// 최종 점수 1판 = Firestore quizScores 1문서.
+// 이 기능을 배포하기 전 firebase.rules 의 quizScores 규칙을 먼저 Firebase에 적용해야 합니다.
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebaseClient";
 
@@ -21,8 +21,15 @@ export const QUIZ_SCORE_COLLECTION_ENABLED = process.env.REACT_APP_QUIZ_SCORE_CO
 
 export async function saveQuizCompletion(item: QuizCompletion): Promise<void> {
   if (!QUIZ_SCORE_COLLECTION_ENABLED || process.env.NODE_ENV !== "production") return;
+  // 초기 익명 인증이 아직 끝나지 않은 경우를 대비합니다.
+  await auth.authStateReady();
   const user = auth.currentUser;
-  if (!user) return; // 인증 실패 시 게임을 막지 않음
+  if (!user) {
+    console.warn("퀴즈 점수 저장 건너뜀: 익명 로그인 상태가 아닙니다.");
+    return; // 인증이 안 되어도 퀴즈 결과는 보여줍니다.
+  }
+  // Firestore 규칙: create만 허용, update/read/delete 금지.
+  // 동일 attemptId 재전송으로 기록을 바꾸지 못합니다.
   await setDoc(doc(db, "quizScores", item.attemptId), {
     uid: user.uid,
     mode: item.mode,

@@ -291,6 +291,30 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const [startSec, setStartSec] = useState<number>(20);
   const [tries, setTries] = useState<number>(0);
   const [status, setStatus] = useState<"playing" | "correct" | "giveup">("playing");
+
+  // 마지막 문제의 정답/포기가 확정되면 한 판 완료를 즉시 기록합니다.
+  // 이전 구현은 별도의 '결과 보기' 버튼을 눌러야 기록되어 완료율이 낮게 집계될 수 있었습니다.
+  useEffect(() => {
+    if (phase !== "playing" || status === "playing" ||
+        questionQueue.length === 0 || history.length !== questionQueue.length) return;
+    const runId = runIdRef.current;
+    if (!runId || completedRunRef.current === runId) return;
+    completedRunRef.current = runId; // 동일 게임 중복 이벤트/저장 방지
+    const summary = summarizeHistory(history, questionQueue.length);
+    const mode = easyMode ? "easy" : "hard";
+    const pool = runPoolRef.current;
+    trackAnalyticsEvent("quiz_completed", {
+      difficulty: mode,
+      question_count: questionQueue.length,
+      pool_type: pool,
+      score: summary.score
+    });
+    void saveQuizCompletion({
+      attemptId: runId, mode, questionCount: questionQueue.length, pool,
+      score: summary.score, perfect: summary.perfect,
+      otherCorrect: summary.otherCorrect, giveup: summary.giveup
+    }).catch((err) => console.warn("퀴즈 점수 저장 실패 (게임은 정상 진행):", err));
+  }, [phase, status, history, questionQueue.length, easyMode]);
   const [wrongShake, setWrongShake] = useState(false);
   const [showUnitHint, setShowUnitHint] = useState(false);
   const [guess, setGuess] = useState("");
@@ -689,23 +713,6 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     const nextIdx = questionIdx + 1;
     if (nextIdx >= questionQueue.length) {
       stopPlayerSafely();
-      const runId = runIdRef.current;
-      if (runId && completedRunRef.current !== runId && history.length === questionQueue.length) {
-        completedRunRef.current = runId; // 더블 클릭·중복 이벤트 방지
-        const summary = summarizeHistory(history, questionQueue.length);
-        const mode = easyMode ? "easy" : "hard";
-        const pool = runPoolRef.current;
-        trackAnalyticsEvent("quiz_completed", {
-          difficulty: mode, question_count: questionQueue.length,
-          pool_type: pool, score: summary.score
-        });
-        // 저장 실패해도 퀴즈 화면이나 결과 이미지에는 영향이 없어야 함.
-        void saveQuizCompletion({
-          attemptId: runId, mode, questionCount: questionQueue.length, pool,
-          score: summary.score, perfect: summary.perfect,
-          otherCorrect: summary.otherCorrect, giveup: summary.giveup
-        }).catch((err) => console.warn("퀴즈 익명 점수 저장 실패 (게임은 정상 진행):", err));
-      }
       setPhase("summary");
     } else {
       setQuestionIdx(nextIdx);
