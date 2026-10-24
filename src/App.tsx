@@ -1,88 +1,149 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
-import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
+import type { Agency, Member, MyRoom, Picks, RoomData, RoomUsers, UserDoc } from "./types";
 import {
-  doc,
-  setDoc,
-  updateDoc,
-  writeBatch,
-  getDocFromServer,
-  serverTimestamp
-} from "firebase/firestore";
+  BOARD_GAP, BOARD_SLOT, CARD_PADDING, IN_APP_BROWSER, MAX_NICKNAME_LENGTH, MAX_ROOM_NAME,
+  MAX_USERS_PER_ROOM, MY_ROOMS_MAX, NICK_KEY, PICKS_KEY, REFRESH_COOLDOWN_MS, ROOM_CACHE_TTL_MS,
+  STATS_SAMPLE_RATE, SUBMIT_COOLDOWN_MS
+} from "./config";
+import { LANG_KEY, LOCALE, detectInitialLang, normalizeLang, translate } from "./i18n";
+import type { Lang, MsgKey } from "./i18n";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import SongQuiz from "./SongQuiz";
+import { trackAnalyticsEvent } from "./analytics";
+import { auth, db } from "./firebaseClient";
+import { balancedMaxWidth, copyText, safeFileName, samePicks, withTimeout } from "./utils";
+import { blobToDataUrl, renderPersonalBlob, renderToBlob, triggerDownload } from "./imageExport";
+import { computeMatches } from "./matching";
+import { doc, getDocFromServer, serverTimestamp, setDoc, updateDoc, writeBatch } from "firebase/firestore";
+import { clearPendingCreateRoom, fetchRoom, getPendingCreateRoom, loadRoomCache, parseRoomId, parseUserDoc, saveRoomCache } from "./rooms";
+import { getServerErrorKind, isServerBusyNow, markServerBusy, serverBusyRemainingMs } from "./serverStatus";
+import { layoutLogos } from "./logoLayout";
+import { loadSheetAgencies } from "./csv";
+import { PICK_SHEETS, VISIBLE_PICK_SHEET_IDS, SPECIAL_UNITS, groupSpecialUnits, sheetFromHash, sheetLocalKey, type PickSheetId } from "./pickSheets";
+import { loadLocalNickname, loadLocalPicks, loadMyRooms, saveLocal, saveMyRooms } from "./storage";
+import { localizeAgencies } from "./localize";
+import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
+import { onImgError } from "./assets";
+import { sendAnonymousStats } from "./stats";
+import LangSwitch from "./components/LangSwitch";
+import MyRoomsPanel from "./components/MyRoomsPanel";
+import ImagePreviewModal from "./components/ImagePreviewModal";
 import "./styles.css";
 import "./lang.css";
-import { layoutLogos } from "./logoLayout";
-import { computeMatches } from "./matching";
-import { LANGS, LANG_LABEL, LANG_KEY, LOCALE, detectInitialLang, translate } from "./i18n";
-import type { Lang, MsgKey } from "./i18n";
-import { auth, db } from "./firebaseClient";
-import {
-  agencyConfig,
-  BOARD_GAP,
-  BOARD_SLOT,
-  CARD_PADDING,
-  IN_APP_BROWSER,
-  LOGO_IMG_DIR,
-  MAX_NICKNAME_LENGTH,
-  MAX_ROOM_NAME,
-  MAX_USERS_PER_ROOM,
-  MEMBER_IMG_DIR,
-  MY_ROOMS_MAX,
-  NICK_KEY,
-  PICKS_KEY,
-  REFRESH_COOLDOWN_MS,
-  ROOM_CACHE_TTL_MS,
-  STATS_SAMPLE_RATE,
-  SUBMIT_COOLDOWN_MS
-} from "./types";
-import type { Agency, Group, Member, MyRoom, NameMap, Picks, RoomData, RoomUsers, UserDoc } from "./types";
-import {
-  avatarUri,
-  badgeUri,
-  balancedMaxWidth,
-  copyText,
-  formatDate,
-  generateRoomId,
-  loadCsv,
-  localizeAgencies,
-  onImgError,
-  parseRoomId,
-  resolveAsset,
-  resolveImg,
-  safeFileName,
-  samePicks,
-  stripQuotes,
-  withTimeout
-} from "./utils";
-import {
-  fetchRoom,
-  isServerBusyError,
-  isServerBusyNow,
-  loadLocalNickname,
-  loadLocalPicks,
-  loadMyRooms,
-  loadRoomCache,
-  markServerBusy,
-  parseUserDoc,
-  saveLocal,
-  saveMyRooms,
-  saveRoomCache,
-  sendAnonymousStats
-} from "./storage";
-import { blobToDataUrl, renderPersonalBlob, renderToBlob, triggerDownload } from "./imageExport";
 
+// 선택지 전환은 각 취향표를 remount해 이전 취향표의 상태가 새 화면에 남지 않게 합니다.
 export default function App() {
+  const [sheetId, setSheetId] = useState<PickSheetId>(() => sheetFromHash(window.location.hash) ?? "current");
+  useEffect(() => {
+    const sync = () => {
+      const next = sheetFromHash(window.location.hash);
+      if (next) setSheetId(next);
+    };
+    window.addEventListener("popstate", sync);
+    window.addEventListener("hashchange", sync);
+    return () => {
+      window.removeEventListener("popstate", sync);
+      window.removeEventListener("hashchange", sync);
+    };
+  }, []);
+  const switchSheet = (next: PickSheetId) => {
+    if (sheetId === next) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("room");
+    url.searchParams.delete("pk");
+    url.searchParams.delete("nk");
+    url.hash = PICK_SHEETS[next].route;
+    window.history.pushState({}, "", url.toString());
+    setSheetId(next);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  return <PickYoursMain key={sheetId} sheetId={sheetId} onSwitchSheet={switchSheet} />;
+}
+
+function PickYoursMain({ sheetId, onSwitchSheet }: {
+  sheetId: PickSheetId;
+  onSwitchSheet: (next: PickSheetId) => void;
+}) {
+  const sheetConfig = PICK_SHEETS[sheetId];
+  const multiplayer = sheetConfig.multiplayer;
+  const roomCollection = sheetConfig.collection;
+  const sheetRoute = sheetConfig.route;
+  const titleForSheet = (language: Lang) => sheetConfig.labels[language];
+
   // 인증(익명) — 공유(저장)할 때만 필요합니다. 실패해도 선택/이미지 저장은 가능
   const [uid, setUid] = useState<string | null>(null);
   const [authError, setAuthError] = useState(false);
 
-  const [nickname, setNickname] = useState(() => loadLocalNickname());
-  const [picks, setPicks] = useState<Picks>(() => loadLocalPicks());
+  // 공유방 링크로 시작하면 이전 방의 전역 닉네임 대신 해당 방에 저장한 닉네임을 사용
+  const [nickname, setNickname] = useState(() => {
+    const initialRoomId = multiplayer ? parseRoomId() : null;
+    return initialRoomId
+      ? loadMyRooms(sheetId).find((r) => r.id === initialRoomId)?.nickname ?? ""
+      : loadLocalNickname(sheetId);
+  });
+  const [picks, setPicks] = useState<Picks>(() => loadLocalPicks(sheetId));
 
-  const [roomId, setRoomId] = useState<string | null>(() => parseRoomId());
+  const [roomId, setRoomId] = useState<string | null>(() => multiplayer ? parseRoomId() : null);
   const [roomUsers, setRoomUsers] = useState<RoomUsers>({});
-  const [roomLoaded, setRoomLoaded] = useState<boolean>(() => !parseRoomId());
+  const [roomLoaded, setRoomLoaded] = useState<boolean>(() => !multiplayer || !parseRoomId());
   const [roomError, setRoomError] = useState(false);
 
+  // 주소(#/quiz, ?page=quiz, ?tab=quiz, /quiz)를 읽어 초기 서비스 화면 결정
+  type ServiceId = "picks" | "quiz";
+  const detectServiceFromUrl = (): ServiceId => {
+    const hash = window.location.hash.replace(/^#\/?/, "").split("?")[0].trim().toLowerCase();
+    if (hash === "quiz" || hash === "songquiz") return "quiz";
+    if (hash === "picks" || hash === "home" || hash.startsWith("picks/")) return "picks";
+    const sp = new URLSearchParams(window.location.search);
+    const q = (sp.get("page") || sp.get("tab") || "").toLowerCase();
+    if (q === "quiz" || q === "songquiz") return "quiz";
+    if (/\/(quiz|songquiz)\/?$/i.test(window.location.pathname)) return "quiz";
+    return "picks";
+  };
+
+  const [activeTab, setActiveTab] = useState<ServiceId>(() => detectServiceFromUrl());
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // 서비스 이동 함수: 주소창에 #/quiz 또는 #/picks 를 반영해 고유 링크와 뒤로가기를 지원
+  const navigateService = (target: ServiceId) => {
+    setActiveTab(target);
+    setDrawerOpen(false);
+    const targetHash = target === "quiz" ? "#/quiz" : sheetRoute;
+    if (window.location.hash !== targetHash) {
+      window.location.hash = targetHash;
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // 브라우저 뒤로가기/앞으로가기 또는 주소 해시 변경 시 화면 동기화
+  useEffect(() => {
+    const onRouteChange = () => {
+      setActiveTab(detectServiceFromUrl());
+      setDrawerOpen(false);
+    };
+    window.addEventListener("hashchange", onRouteChange);
+    window.addEventListener("popstate", onRouteChange);
+    return () => {
+      window.removeEventListener("hashchange", onRouteChange);
+      window.removeEventListener("popstate", onRouteChange);
+    };
+  }, []);
+
+  // GA4 기본 page_view는 Analytics SDK가 자동 기록하므로 중복 전송하지 않습니다.
+  // 탭 간 이동은 별도 커스텀 이벤트로 구분합니다 (해시 기반 SPA).
+  useEffect(() => {
+    trackAnalyticsEvent("service_view", { service: activeTab });
+    if (activeTab === "picks") trackAnalyticsEvent("pick_sheet_view", { sheet_id: sheetId });
+  }, [activeTab, sheetId]);
+
+  // ESC 키로 서랍 메뉴 닫기
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawerOpen]);
   const [showResult, setShowResult] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [lang, setLang] = useState<Lang>(() => detectInitialLang());
@@ -97,35 +158,58 @@ export default function App() {
   // 언어가 바뀌면 <html lang>과 탭 제목도 맞춤
   useEffect(() => {
     document.documentElement.lang = lang;
-    document.title = translate(lang, "appTitle");
-  }, [lang]);
+    document.title = activeTab === "quiz" ? translate(lang, "quizTitle") : `${titleForSheet(lang)} | PickYours`;
+  }, [lang, activeTab]);
 
-  // 주소에 ?lang= 이 실려 왔다면(앱 안 브라우저에서 넘어온 경우) 이번 접속에서만 그 언어로 보여 주고
-  // (이 기기의 언어 설정으로 저장하지 않음), 공유 링크에 언어가 섞이지 않도록 주소에서만 지움
+  // 주소에 ?lang= 이 실려 왔다면(앱 안 브라우저에서 넘어온 경우) 이 기기의 언어로 저장하고,
+  // 공유 링크에 언어가 섞이지 않도록 주소에서 지움
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     if (!sp.has("lang")) return;
+    const fromUrl = normalizeLang(sp.get("lang"));
+    if (fromUrl) saveLocal(LANG_KEY, fromUrl);
     sp.delete("lang");
     const qs = sp.toString();
-    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
   }, []);
 
-  const [baseAgencies, setBaseAgencies] = useState<Agency[]>([]); // CSV 그대로 (한국어 이름)
+  const [baseAgencies, setBaseAgencies] = useState<Agency[]>([]);
+  const [sheetDataLoaded, setSheetDataLoaded] = useState(false); // CSV 그대로 (한국어 이름)
   const agencies = useMemo(() => localizeAgencies(baseAgencies, lang), [baseAgencies, lang]); // 화면 표시용
+  // 스페셜 유닛: 화면 미리보기와 저장 이미지가 동일한 섹션 구성을 사용합니다.
+  const specialSections = useMemo(
+    () => sheetId === "special"
+      ? groupSpecialUnits(agencies.flatMap((agency) => agency.groups), lang)
+      : [],
+    [agencies, lang, sheetId]
+  );
 
   const [preview, setPreview] = useState<{ src: string; blob: Blob; name: string } | null>(null); // 다운로드가 안 되는 환경용 안내 창
   const [savingImage, setSavingImage] = useState(false);
   const transferApplied = useRef(false);
   const [serverBusy, setServerBusy] = useState<boolean>(() => isServerBusyNow());
+  // 짧은 네트워크 장애 제한이 끝나면 안내 문구도 자동으로 사라지게 처리
+  useEffect(() => {
+    if (!serverBusy) return;
+    const remaining = serverBusyRemainingMs();
+    if (remaining <= 0) {
+      setServerBusy(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setServerBusy(false), remaining + 100);
+    return () => window.clearTimeout(timer);
+  }, [serverBusy]);
   const lastSubmitAt = useRef(0);
   const boardRef = useRef<HTMLDivElement>(null);
   const personalRef = useRef<HTMLDivElement>(null);
   const nicknameRef = useRef<HTMLInputElement>(null);
   const restored = useRef(false);
+  // 방 정보를 읽는 동안 사용자가 직접 닉네임을 고쳤다면 서버 값으로 덮어쓰지 않음
+  const nicknameEditedInRoom = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
   const [listWidth, setListWidth] = useState(0);
   const [logoRatios, setLogoRatios] = useState<Record<string, number>>({});
-  const [myRooms, setMyRooms] = useState<MyRoom[]>(() => loadMyRooms());
+  const [myRooms, setMyRooms] = useState<MyRoom[]>(() => loadMyRooms(sheetId));
   const [roomName, setRoomName] = useState(""); // 현재 방의 이름 (서버)
   const [roomOwner, setRoomOwner] = useState<string | null>(null); // 현재 방을 만든 사람의 uid
   const [roomMetaLoaded, setRoomMetaLoaded] = useState(false);
@@ -145,95 +229,30 @@ export default function App() {
     const unsub = onAuthStateChanged(auth, (user) => {
       if (user) setUid(user.uid);
     });
-    signInAnonymously(auth).catch((err) => {
+    // 취향표 인덱스 전환마다 불필요한 익명 로그인 요청을 반복하지 않습니다.
+    if (!auth.currentUser) signInAnonymously(auth).catch((err) => {
       console.error("익명 로그인 실패:", err);
       setAuthError(true);
     });
     return unsub;
   }, []);
 
-  // ── CSV 로드 (멤버: ES_list.csv, 유닛 로고: units.csv)
+  // ── CSV 로드 (멤버: ES_list.csv, 유닛 로고·이름: units.csv) → csv.ts의 loadAgencies
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const rows = await loadCsv("ES_list.csv");
-        if (rows.length > 0 && Object.keys(rows[0]).join("").includes("html")) {
+    loadSheetAgencies(sheetId)
+      .then((parsed) => {
+        if (!cancelled) { setBaseAgencies(parsed); setSheetDataLoaded(true); }
+      })
+      .catch((err) => {
+        if (!cancelled) setSheetDataLoaded(true);
+        if ((err as { code?: string })?.code === "csv-path") {
           alert(translate(langRef.current, "alertCsvPath"));
-          return;
+        } else {
+          console.error("CSV 로드 에러:", err);
+          alert(translate(langRef.current, "alertCsvError"));
         }
-
-        // units.csv: unit,logo  → 유닛·소속사 이름(대소문자 무시)으로 로고 연결. 파일이 없어도 정상 동작
-        const logoMap: Record<string, string> = {};
-        const nameMap: Record<string, NameMap> = {}; // units.csv의 name_en / name_ja
-        try {
-          const unitRows = await loadCsv("units.csv");
-          unitRows.forEach((r) => {
-            if (!("unit" in r)) return; // 파일이 없어 404 HTML이 읽힌 경우 무시
-            const key = stripQuotes(r.unit).toLowerCase();
-            const logo = resolveImg(stripQuotes(r.logo), LOGO_IMG_DIR);
-            if (key && logo) logoMap[key] = logo;
-            const en = stripQuotes(r.name_en);
-            const ja = stripQuotes(r.name_ja);
-            if (key && (en || ja)) nameMap[key] = { en, ja };
-          });
-        } catch (err) {
-          console.warn("units.csv를 읽지 못해 글자 로고를 사용합니다.", err);
-        }
-        if (cancelled) return;
-
-        const usedIds = new Set<string>();
-        const parsed: Agency[] = agencyConfig.map((cfg, aIdx) => {
-          const groups: Group[] = [];
-          cfg.units.forEach((unit) => {
-            const unitRows = rows.filter(
-              (r) => stripQuotes(r.unit).toLowerCase() === unit.name.toLowerCase()
-            );
-            if (unitRows.length === 0) return;
-
-            groups.push({
-              id: unit.name,
-              name: unit.name,
-              names: nameMap[unit.name.toLowerCase()],
-              logo:
-                logoMap[unit.name.toLowerCase()] ||
-                resolveAsset(unit.logo) ||
-                badgeUri(unit.name, 120, 120, true),
-              members: unitRows.map((r) => {
-                const mName = stripQuotes(r.name) || "알수없음";
-                let id = `${unit.name}::${mName}`;
-                for (let n = 2; usedIds.has(id); n++) id = `${unit.name}::${mName}#${n}`; // 동명이인 대비
-                usedIds.add(id);
-                const fallback = avatarUri(mName);
-                return {
-                  id,
-                  groupId: unit.name,
-                  name: mName,
-                  names: { en: stripQuotes(r.name_en ?? ""), ja: stripQuotes(r.name_ja ?? "") },
-                  img: resolveImg(stripQuotes(r.img), MEMBER_IMG_DIR) || fallback,
-                  fallback
-                };
-              })
-            });
-          });
-          return {
-            id: `agency-${aIdx}`,
-            name: cfg.name,
-            names: nameMap[cfg.name.toLowerCase()],
-            logo:
-              logoMap[cfg.name.toLowerCase()] ||
-              resolveAsset(cfg.logo) ||
-              badgeUri(cfg.name, 240, 48, false),
-            groups
-          };
-        });
-
-        setBaseAgencies(parsed);
-      } catch (err) {
-        console.error("CSV 로드 에러:", err);
-        alert(translate(langRef.current, "alertCsvError"));
-      }
-    })();
+      });
     return () => {
       cancelled = true;
     };
@@ -258,11 +277,15 @@ export default function App() {
     );
     if (Object.keys(next).length > 0) setPicks(next);
     const nk = sp.get("nk");
-    if (nk) setNickname(nk.slice(0, MAX_NICKNAME_LENGTH));
+    if (nk) {
+      // 다른 브라우저에서 현재 입력한 닉네임을 넘겼다면, 늦게 도착한 방 데이터로 덮어쓰지 않음
+      nicknameEditedInRoom.current = true;
+      setNickname(nk.slice(0, MAX_NICKNAME_LENGTH));
+    }
     sp.delete("pk");
     sp.delete("nk");
     const qs = sp.toString();
-    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
   }, [agencies]);
 
   // 방 이름이 바뀌면 '내가 참여한 방' 목록의 이름도 맞춰 둠
@@ -273,7 +296,7 @@ export default function App() {
       if (idx < 0 || (prev[idx].roomName || "") === roomName) return prev;
       const next = [...prev];
       next[idx] = { ...next[idx], roomName };
-      saveMyRooms(next);
+      saveMyRooms(next, sheetId);
       return next;
     });
   }, [roomId, roomName, roomMetaLoaded]);
@@ -298,7 +321,7 @@ export default function App() {
     };
 
     (async () => {
-      const cached = loadRoomCache(roomId);
+      const cached = loadRoomCache(roomId, sheetId);
       if (cached) apply(cached);
       if (!uid) {
         // 아직 로그인 전이거나 서버에 연결할 수 없는 상태: 저장된 결과가 있으면 그걸로 보여줌
@@ -316,11 +339,11 @@ export default function App() {
       }
       setRoomLoading(true);
       try {
-        const fresh = await fetchRoom(roomId);
+        const fresh = await fetchRoom(roomId, sheetId);
         if (!isLatest()) return;
         apply(fresh);
         setRoomStale(false);
-        if (Object.keys(fresh.users).length > 0) saveRoomCache(roomId, fresh);
+        if (Object.keys(fresh.users).length > 0) saveRoomCache(roomId, fresh, sheetId);
       } catch (err) {
         if (!isLatest()) return;
         console.warn("방 불러오기 실패:", err);
@@ -356,7 +379,7 @@ export default function App() {
     const ro = new ResizeObserver((entries) => setListWidth(entries[0].contentRect.width));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [agencies.length, showResult]);
+  }, [agencies.length, showResult, sheetId]);
 
   // 유닛 로고의 가로세로 비율을 미리 읽어 둠 (결과표에서 로고 크기를 맞추는 데 사용)
   useEffect(() => {
@@ -456,10 +479,10 @@ export default function App() {
 
   // 내 선택/닉네임이 바뀔 때마다 이 기기에 저장
   useEffect(() => {
-    saveLocal(PICKS_KEY, JSON.stringify(picks));
+    saveLocal(sheetLocalKey(PICKS_KEY, sheetId), JSON.stringify(picks));
   }, [picks]);
   useEffect(() => {
-    saveLocal(NICK_KEY, nickname);
+    saveLocal(sheetLocalKey(NICK_KEY, sheetId), nickname);
   }, [nickname]);
 
   // CSV가 바뀌어 없어진 멤버/유닛이 저장돼 있으면 정리
@@ -482,7 +505,7 @@ export default function App() {
     const mine = roomUsers[uid];
     if (!mine) return;
     restored.current = true;
-    setNickname((cur) => cur || mine.nickname);
+    if (!nicknameEditedInRoom.current) setNickname(mine.nickname);
     setPicks((cur) => {
       if (Object.keys(cur).length > 0) return cur; // 이미 고르기 시작했다면 덮어쓰지 않음
       const r: Picks = {};
@@ -528,7 +551,7 @@ export default function App() {
       })
       .join("");
     const u = new URL(window.location.href);
-    u.hash = "";
+    u.hash = sheetRoute;
     u.searchParams.set("lang", lang);
     u.searchParams.set("pk", code);
     if (trimmedName) u.searchParams.set("nk", trimmedName);
@@ -562,7 +585,7 @@ export default function App() {
   };
 
   const requireComplete = () => {
-    if (pickedCount < totalGroups) {
+    if (totalGroups === 0 || pickedCount < totalGroups) {
       alert(t("alertPickAll", { total: totalGroups, picked: pickedCount }));
       return false;
     }
@@ -582,9 +605,12 @@ export default function App() {
             agencies,
             picks,
             memberMap,
-            trimmedName ? t("personalTitleNamed", { name: trimmedName }) : t("personalTitleDefault")
+            trimmedName ? t("personalTitleNamed", { name: trimmedName }) : t("personalTitleDefault"),
+            sheetId === "current" ? undefined : titleForSheet(lang),
+            sheetId,
+            lang
           ),
-        `${safeFileName(trimmedName || "my")}_picks.png`,
+        `${safeFileName(trimmedName || "my")}_${sheetId}_picks.png`,
         30000
       );
     } catch (err) {
@@ -594,7 +620,7 @@ export default function App() {
     }
     // 통계 전송은 이미지 저장이 끝난 뒤, 실패해도 저장에 영향이 없도록 따로 처리
     try {
-      sendAnonymousStats(picks, uid, validGroupIds, lang);
+      if (sheetId === "current") sendAnonymousStats(picks, uid, validGroupIds, lang);
     } catch {
       /* 무시 */
     }
@@ -609,9 +635,14 @@ export default function App() {
       nicknameRef.current?.focus();
       return;
     }
-    if (isServerBusyNow()) {
+    const remainingMs = serverBusyRemainingMs();
+    if (remainingMs > 0) {
       setServerBusy(true);
-      alert(t("serverBusyMsg"));
+      if (remainingMs > 60 * 1000) {
+        alert(t("alertRetryMinutes", { minutes: Math.ceil(remainingMs / (60 * 1000)) }));
+      } else {
+        alert(t("alertRetrySeconds", { seconds: Math.ceil(remainingMs / 1000) }));
+      }
       return;
     }
     if (!uid) {
@@ -639,10 +670,17 @@ export default function App() {
 
     setSubmitting(true);
     try {
-      const rid = roomId ?? generateRoomId();
       const cleanPicks: Picks = {};
       Object.entries(picks).forEach(([g, m]) => {
         if (validGroupIds.has(g)) cleanPicks[g] = m;
+      });
+
+      const creating = !roomId;
+      const newRoomName = roomNameInput.trim().slice(0, MAX_ROOM_NAME);
+      // 동일 내용의 미확정 새 방 생성은 같은 ID로 재시도 (정상적인 다른 새 방 생성은 새 ID)
+      const createSignature = JSON.stringify({
+        nickname: trimmedName, name: newRoomName,
+        picks: Object.keys(cleanPicks).sort().map((g) => [g, cleanPicks[g]])
       });
 
       // 이미 같은 내용으로 제출돼 있으면 서버에 쓰지 않음 (쓰기 절약)
@@ -656,8 +694,11 @@ export default function App() {
         return;
       }
 
+      const pending = creating ? getPendingCreateRoom(uid, createSignature, sheetId) : null;
+      const rid = roomId ?? pending!.rid;
+
       // 문서 id = 내 uid → 내 데이터만 쓸 수 있고, 닉네임이 같아도 서로 다른 문서로 저장됨
-      const userRef = doc(db, "rooms", rid, "users", uid);
+      const userRef = doc(db, roomCollection, rid, "users", uid);
       const userData = {
         nickname: trimmedName,
         picks: cleanPicks,
@@ -665,19 +706,42 @@ export default function App() {
         joinedAt: roomUsers[uid]?.joinedTs ?? serverTimestamp()
       };
 
-      const creating = !roomId;
-      const newRoomName = roomNameInput.trim().slice(0, MAX_ROOM_NAME);
-      if (creating) {
-        // 새 방: 방 정보(이름, 만든 사람)와 내 기록을 한 번에(둘 다 성공하거나 둘 다 실패) 저장
-        const batch = writeBatch(db);
-        batch.set(doc(db, "rooms", rid), { name: newRoomName, ownerUid: uid });
-        batch.set(userRef, userData);
-        await withTimeout(batch.commit(), 12000);
-      } else {
-        await withTimeout(setDoc(userRef, userData), 12000);
+      // 새 방 생성에 사용한 ID가 서버에 이미 존재하는지 확인.
+      // 타임아웃으로 커밋만 뒤늦게 성공했을 때 다시 덮어쓰지 않는다.
+      const alreadySaved = async (): Promise<boolean> => {
+        const snap = await withTimeout(getDocFromServer(userRef), 7000);
+        if (!snap.exists()) return false;
+        const mine = parseUserDoc(snap.data());
+        return !!mine?.joinedTs && mine.nickname === trimmedName && samePicks(mine.picks, cleanPicks);
+      };
+
+      let writeConfirmed = false;
+      if (creating && pending?.reused) {
+        // 저장 확인이 불가능한 상태라면 새 커밋을 보내지 않아 중복/충돌 위험을 줄임
+        writeConfirmed = await alreadySaved();
+      }
+      if (!writeConfirmed) {
+        try {
+          if (creating) {
+            // 새 방과 내 기록을 한 번의 원자적 배치로 저장
+            const batch = writeBatch(db);
+            batch.set(doc(db, roomCollection, rid), { name: newRoomName, ownerUid: uid });
+            batch.set(userRef, userData);
+            await withTimeout(batch.commit(), 12000);
+          } else {
+            await withTimeout(setDoc(userRef, userData), 12000);
+          }
+        } catch (err) {
+          // 응답만 늦고 실제 저장은 성공했을 수 있음. 새 방은 동일 ID의 저장 여부를 검사.
+          // 확인 자체가 실패하면 pending ID를 유지하므로 다음 시도에도 다른 방을 만들지 않음.
+          if (!creating) throw err;
+          let confirmed = false;
+          try { confirmed = await alreadySaved(); } catch { /* 다음 시도에서 같은 ID로 재확인 */ }
+          if (!confirmed) throw err;
+        }
       }
 
-      sendAnonymousStats(cleanPicks, uid, validGroupIds, lang);
+      if (sheetId === "current") sendAnonymousStats(cleanPicks, uid, validGroupIds, lang);
 
       const nextRooms = [
         {
@@ -689,7 +753,7 @@ export default function App() {
         ...myRooms.filter((r) => r.id !== rid)
       ].slice(0, MY_ROOMS_MAX);
       setMyRooms(nextRooms);
-      saveMyRooms(nextRooms);
+      saveMyRooms(nextRooms, sheetId);
 
       lastSubmitAt.current = Date.now();
 
@@ -710,7 +774,7 @@ export default function App() {
           ownerUid: creating ? uid : roomOwner,
           users: { ...(creating ? {} : roomUsers), [uid]: saved }
         };
-        saveRoomCache(rid, nextData);
+        saveRoomCache(rid, nextData, sheetId);
         setRoomUsers(nextData.users);
         setRoomName(nextData.name);
         setRoomOwner(nextData.ownerUid);
@@ -721,27 +785,33 @@ export default function App() {
         setRoomLoaded(true);
         setRoomStale(false);
         if (creating) {
-          window.history.replaceState({}, "", `?room=${rid}`);
+          window.history.replaceState({}, "", `${window.location.pathname}?room=${rid}${sheetRoute}`);
           setRoomId(rid);
         }
       } else {
         // 내 문서를 못 읽었을 때만 예전처럼 방 전체를 다시 읽음
         forceRefresh.current = true;
         if (!roomId) {
-          window.history.replaceState({}, "", `?room=${rid}`);
+          window.history.replaceState({}, "", `${window.location.pathname}?room=${rid}${sheetRoute}`);
           setRoomId(rid);
         } else {
           setRoomRefreshTick((t) => t + 1);
         }
       }
+      if (creating) clearPendingCreateRoom(rid, sheetId);
       setNickname(trimmedName);
       setShowResult(true);
     } catch (err) {
       console.error("제출 에러:", (err as { code?: string })?.code, err);
-      if (isServerBusyError(err)) {
-        markServerBusy();
-        setServerBusy(true);
+      const kind = getServerErrorKind(err);
+      const delay = markServerBusy(err);
+      if (delay > 0) setServerBusy(true);
+      if (kind === "quota") {
         alert(t("serverBusyMsg"));
+      } else if (kind === "unavailable" || kind === "deadline") {
+        alert(t("alertNetworkRetry", { seconds: Math.ceil(delay / 1000) }));
+      } else if (kind === "timeout") {
+        alert(t("alertSaveUncertain"));
       } else {
         alert(t("alertSaveError"));
       }
@@ -759,7 +829,7 @@ export default function App() {
   const startNewRoom = () => {
     const ok = window.confirm(t("confirmNewRoom"));
     if (!ok) return;
-    window.history.replaceState({}, "", window.location.pathname);
+    window.history.replaceState({}, "", `${window.location.pathname}${sheetRoute}`);
     setRoomId(null);
     setRoomUsers({});
     setRoomName("");
@@ -782,8 +852,11 @@ export default function App() {
       const ok = window.confirm(t("confirmSwitchRoom"));
       if (!ok) return;
     }
-    window.history.replaceState({}, "", `${window.location.pathname}?room=${id}`);
+    window.history.replaceState({}, "", `${window.location.pathname}?room=${id}${sheetRoute}`);
     restored.current = false;
+    nicknameEditedInRoom.current = false;
+    // 방마다 저장한 닉네임이 있으면 즉시 복원, 처음 들어간 방이면 빈칸으로 시작
+    setNickname(myRooms.find((r) => r.id === id)?.nickname ?? "");
     setPicks({});
     setRoomUsers({});
     setRoomName("");
@@ -806,7 +879,7 @@ export default function App() {
     if (input === null) return;
     const newName = input.trim().slice(0, MAX_ROOM_NAME);
     try {
-      await withTimeout(updateDoc(doc(db, "rooms", roomId), { name: newName }), 12000);
+      await withTimeout(updateDoc(doc(db, roomCollection, roomId), { name: newName }), 12000);
       // 서버 저장이 끝나면 화면과 이 기기의 저장본에도 바로 반영
       setRoomName(newName);
       saveRoomCache(roomId, {
@@ -815,7 +888,7 @@ export default function App() {
         name: newName,
         ownerUid: roomOwner,
         users: roomUsers
-      });
+      }, sheetId);
     } catch (err) {
       console.error("방 이름 변경 에러:", err);
       alert(t("alertRenameFail"));
@@ -826,14 +899,14 @@ export default function App() {
   const removeMyRoom = (id: string) => {
     const next = myRooms.filter((r) => r.id !== id);
     setMyRooms(next);
-    saveMyRooms(next);
+    saveMyRooms(next, sheetId);
   };
 
   const saveBoardImage = async () => {
     const target = boardRef.current;
     if (!target) return;
     try {
-      await runSave(() => renderToBlob(target, true), "multi_picks.png", 60000);
+      await runSave(() => renderToBlob(target, true), `${sheetId}_multi_picks.png`, 60000);
     } catch (err) {
       console.error("이미지 저장 에러:", err);
       alert(t("alertImageFail"));
@@ -841,69 +914,173 @@ export default function App() {
   };
 
   // ── 화면
-  if (agencies.length === 0) return <div className="App notice-page">{t("loadingData")}</div>;
+  if (!sheetDataLoaded) return <div className="App notice-page">{t("loadingData")}</div>;
 
   const myResultExists = !!uid && !!roomUsers[uid];
 
-  const langSwitch = (
-    <div className="lang-switch" role="group" aria-label={t("langLabel")}>
-      {LANGS.map((l) => (
-        <button
-          key={l}
-          type="button"
-          className={l === lang ? "active" : ""}
-          aria-pressed={l === lang}
-          onClick={() => changeLang(l)}
-        >
-          {LANG_LABEL[l]}
-        </button>
-      ))}
-    </div>
-  );
+  const langSwitch = <LangSwitch lang={lang} onChange={changeLang} t={t} />;
 
-  const myRoomsPanel =
-    myRooms.length > 0 ? (
-      <details className="my-rooms">
-        <summary>{t("myRoomsSummary", { n: myRooms.length })}</summary>
-        <ul>
-          {myRooms.map((r) => (
-            <li key={r.id} className={r.id === roomId ? "current" : ""}>
+  const myRoomsPanel = multiplayer ? (
+    <MyRoomsPanel
+      myRooms={myRooms}
+      roomId={roomId}
+      lang={lang}
+      t={t}
+      onOpen={openRoom}
+      onRemove={removeMyRoom}
+    />
+  ) : null;
+
+  // 앞으로 새 서비스를 추가할 때 이 배열에 항목만 추가하면 서랍 메뉴와 고유 주소(#/아이디)가 자동으로 표시됩니다.
+  const serviceList: {
+    id: ServiceId;
+    icon: string;
+    title: string;
+    desc: string;
+    hashPath: string;
+  }[] = [
+    {
+      id: "picks",
+      icon: "⭐",
+      title: t("tabPicks").replace(/^⭐\s*/, ""),
+      desc: t("navDescPicks"),
+      hashPath: sheetRoute
+    },
+    {
+      id: "quiz",
+      icon: "🎵",
+      title: t("tabQuiz").replace(/^🎵\s*/, ""),
+      desc: t("navDescQuiz"),
+      hashPath: "#/quiz"
+    }
+  ];
+
+  const currentService = serviceList.find((s) => s.id === activeTab) || serviceList[0];
+
+  const copyCurrentServiceUrl = async () => {
+    const base = window.location.origin + window.location.pathname;
+    const shareUrl =
+      activeTab === "quiz"
+        ? `${base}#/quiz`
+        : roomId
+        ? `${base}?room=${roomId}${sheetRoute}`
+        : `${base}${sheetRoute}`;
+    const ok = await copyText(shareUrl);
+    alert(ok ? t("navPageUrlCopied", { url: shareUrl }) : t("alertCopyFailed"));
+  };
+
+  const siteHeader = (
+    <>
+      <header className="site-header">
+        <div className="site-header-inner">
+          <div className="site-header-left">
+            <button
+              type="button"
+              className="menu-trigger-btn"
+              aria-expanded={drawerOpen}
+              onClick={() => setDrawerOpen(true)}
+            >
+              <span className="menu-burger-icon" aria-hidden="true">☰</span>
+              <span>{t("navMenuBtn")}</span>
+            </button>
+            <span className="current-service-pill">
+              <span aria-hidden="true">{currentService.icon}</span>
+              <span>{currentService.title}</span>
+            </span>
+          </div>
+          <div className="site-header-right">
+            <button
+              type="button"
+              className="copy-page-url-btn"
+              onClick={copyCurrentServiceUrl}
+              title={t("navCopyPageUrl")}
+            >
+              {t("navCopyPageUrl")}
+            </button>
+            {langSwitch}
+          </div>
+        </div>
+      </header>
+
+      {drawerOpen && (
+        <div
+          className="drawer-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("navDrawerTitle")}
+          onClick={() => setDrawerOpen(false)}
+        >
+          <aside className="service-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="service-drawer-head">
+              <div>
+                <h2 className="service-drawer-title">{t("navDrawerTitle")}</h2>
+                <p className="service-drawer-sub">{t("navDrawerSub")}</p>
+              </div>
               <button
                 type="button"
-                className="room-link"
-                onClick={() => openRoom(r.id)}
-                disabled={r.id === roomId}
-              >
-                <span className="room-title">{r.roomName || t("unnamedRoom")}</span>
-                <span className="room-nick">{r.nickname}</span>
-                <span className="room-date">{formatDate(r.lastAt, lang)}</span>
-                <span className="room-code">{r.id.slice(0, 6)}…</span>
-                {r.id === roomId && <span className="room-now">{t("currentRoom")}</span>}
-              </button>
-              <button
-                type="button"
-                className="room-remove"
-                aria-label={t("removeFromList")}
-                onClick={() => removeMyRoom(r.id)}
+                className="service-drawer-close"
+                aria-label={t("close")}
+                onClick={() => setDrawerOpen(false)}
               >
                 ×
               </button>
-            </li>
-          ))}
-        </ul>
-        <p className="hint-inline">{t("myRoomsHint")}</p>
-      </details>
-    ) : null;
+            </div>
+            <nav className="service-drawer-list">
+              {serviceList.map((svc) => {
+                const isActive = svc.id === activeTab;
+                return (
+                  <a
+                    key={svc.id}
+                    href={svc.hashPath}
+                    className={`service-drawer-card ${isActive ? "active" : ""}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      navigateService(svc.id);
+                    }}
+                  >
+                    <div className="service-card-top">
+                      <span className="service-card-icon">{svc.icon}</span>
+                      <span className="service-card-name">{svc.title}</span>
+                      <span className="service-card-path">{svc.hashPath}</span>
+                    </div>
+                    <p className="service-card-desc">{svc.desc}</p>
+                  </a>
+                );
+              })}
+            </nav>
+          </aside>
+        </div>
+      )}
+    </>
+  );
 
   return (
     <div className="App">
-      {langSwitch}
-      {!showResult ? (
+      {siteHeader}
+      {activeTab === "picks" && (
+        <nav className="pick-bookmark-nav" aria-label={lang === "ko" ? "취향표 종류" : "Pick sheet categories"}>
+          {VISIBLE_PICK_SHEET_IDS.map((id) => (
+            <button key={id} type="button"
+              className={`pick-bookmark-tab${sheetId === id ? " active" : ""}`}
+              aria-current={sheetId === id ? "page" : undefined}
+              onClick={() => onSwitchSheet(id)}>
+              {PICK_SHEETS[id].labels[lang]}
+            </button>
+          ))}
+        </nav>
+      )}
+      {activeTab === "quiz" ? (
+        <SongQuiz lang={lang} t={t} />
+      ) : !showResult ? (
         <>
           {myRoomsPanel}
-          <h1>{t("appTitle")}</h1>
-          <p className="subtitle">{t("subtitle", { total: totalGroups })}</p>
-          <p className="progress">
+          <h1>{sheetId === "current" ? t("appTitle") : `${titleForSheet(lang)} · PickYours`}</h1>
+          <p className="subtitle">{totalGroups ? t("subtitle", { total: totalGroups }) : (
+            lang === "ko" ? "ES_list.csv에 해당 분류의 멤버를 입력하면 여기에 표시돼요." :
+              lang === "ja" ? "ES_list.csvにメンバーを入力すると、ここに表示されます。" :
+                "Add members to this category in ES_list.csv to show them here."
+          )}</p>
+          {totalGroups > 0 && <p className="progress">
             {pickedCount} / {totalGroups}
             {pickedCount > 0 && (
               <button
@@ -916,9 +1093,9 @@ export default function App() {
                 {t("reset")}
               </button>
             )}
-          </p>
+          </p>}
 
-          {roomId && (
+          {multiplayer && roomId && (
             <div className="room-banner">
               <span>
                 {roomError
@@ -940,6 +1117,14 @@ export default function App() {
             </div>
           )}
 
+          {totalGroups === 0 && (
+            <div className="pick-bookmark-empty">
+              <p>{lang === "ko" ? "CSV에 멤버가 입력되면 선택 화면이 자동으로 열려요." : lang === "ja" ? "CSVにメンバーが登録されると選べます。" : "Members will appear after you update the CSV."}</p>
+              {sheetId === "special" && <div className="pick-bookmark-unit-tags">
+                {SPECIAL_UNITS.map((unit) => <span key={unit}>{unit}</span>)}
+              </div>}
+            </div>
+          )}
           <div className="agency-list" ref={listRef}>
             {agencies.map((agency) => (
               <div key={agency.id} className="agency-container">
@@ -990,15 +1175,63 @@ export default function App() {
           <section className="finish-section">
             <h2 className="finish-title">{t("myPicksTitle")}</h2>
             <div className="personal-wrap">
-              <div ref={personalRef} className="personal-card">
+              <div ref={personalRef} className={`personal-card${sheetId !== "current" ? " personal-card--collection" : ""}${sheetId === "special" ? " personal-card--special" : ""}`}>
+                {sheetId !== "current" && (
+                  <div className="personal-collection-eyebrow">PICKYOURS · {titleForSheet(lang)}</div>
+                )}
                 <h3 className="personal-title">
                   {trimmedName ? t("personalTitleNamed", { name: trimmedName }) : t("personalTitleDefault")}
                 </h3>
-                <div className="personal-grid">
+                {sheetId !== "current" && (
+                  <div className="personal-collection-count">
+                    {lang === "ko" ? `${pickedCount} / ${totalGroups} 선택` :
+                     lang === "ja" ? `${pickedCount} / ${totalGroups} 選択` :
+                     `${pickedCount} / ${totalGroups} selected`}
+                  </div>
+                )}
+                {sheetId === "special" ? (
+                  <div className="personal-special-sections">
+                    {specialSections.map((section, sectionIndex) => (
+                      <section key={section.id} className="personal-special-section" aria-label={section.title}>
+                        <div className="personal-special-section-heading">
+                          <span className="personal-special-section-number">
+                            {String(sectionIndex + 1).padStart(2, "0")}
+                          </span>
+                          <h4>{section.title}</h4>
+                          <span className="personal-special-section-count">{section.groups.length} UNITS</span>
+                        </div>
+                        <div className={`personal-special-picks${section.groups.length > 5 ? " personal-special-picks--six" : ""}`}>
+                          {section.groups.map((g) => {
+                            const m = memberMap[picks[g.id]];
+                            const pick = m && m.groupId === g.id ? m : undefined;
+                            return (
+                              <div key={g.id} className="personal-special-pick">
+                                <div className="personal-special-unit" title={g.name}>{g.name}</div>
+                                <div className="personal-special-photo">
+                                  {pick ? (
+                                    <img src={pick.img} alt={pick.name} onError={onImgError(pick.fallback)} />
+                                  ) : (
+                                    <span aria-label={lang === "ko" ? "미선택" : "Not selected"}>—</span>
+                                  )}
+                                </div>
+                                <div className="personal-special-name">
+                                  {pick?.name || (lang === "ko" ? "미선택" : "—")}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="personal-grid">
                   {agencies.map((agency) => (
-                    <div key={agency.id} className="personal-agency">
-                      <img src={agency.logo} alt={agency.name} className="personal-agency-logo" />
-                      <div className="personal-picks">
+                    <div key={agency.id} className={`personal-agency${sheetId !== "current" ? " personal-agency--collection" : ""}`}>
+                      {sheetId === "current" && (
+                        <img src={agency.logo} alt={agency.name} className="personal-agency-logo" />
+                      )}
+                      <div className={`personal-picks${sheetId !== "current" ? " personal-picks--collection" : ""}`}>
                         {agency.groups.map((g) => {
                           const m = memberMap[picks[g.id]];
                           const pick = m && m.groupId === g.id ? m : undefined;
@@ -1019,10 +1252,12 @@ export default function App() {
                       </div>
                     </div>
                   ))}
-                </div>
+                  </div>
+                )}
               </div>
             </div>
 
+            {multiplayer && <>
             <div className="nickname-row">
               <label htmlFor="nickname">{t("nickname")}</label>
               <input
@@ -1031,7 +1266,10 @@ export default function App() {
                 type="text"
                 value={nickname}
                 maxLength={MAX_NICKNAME_LENGTH}
-                onChange={(e) => setNickname(e.target.value)}
+                onChange={(e) => {
+                  nicknameEditedInRoom.current = true;
+                  setNickname(e.target.value);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur();
                 }}
@@ -1060,28 +1298,29 @@ export default function App() {
               </>
             )}
 
+            </>}
             <div className="finish-buttons">
               <button
                 className="download-btn"
                 onClick={savePersonalImage}
-                disabled={savingImage}
+                disabled={savingImage || pickedCount === 0}
                 style={{ backgroundColor: "#20c997" }}
               >
                 {savingImage ? t("makingImage") : t("saveMyImage")}
               </button>
-              <button className="download-btn" onClick={handleSubmit} disabled={submitting}>
+              {multiplayer && <button className="download-btn" onClick={handleSubmit} disabled={submitting || totalGroups === 0}>
                 {submitting ? t("saving") : roomId ? t("submitToRoom") : t("createShareLink")}
-              </button>
+              </button>}
             </div>
-            {STATS_SAMPLE_RATE > 0 && (
+            {sheetId === "current" && STATS_SAMPLE_RATE > 0 && (
               <p className="hint">
                 {t("statsNoticePre")}
                 <b>{t("statsNoticeBold")}</b>
                 {t("statsNoticePost")}
               </p>
             )}
-            {serverBusy && <p className="hint busy-note">{t("serverBusyNote")}</p>}
-            {authError && <p className="hint">{t("authErrorNote")}</p>}
+            {multiplayer && serverBusy && <p className="hint busy-note">{t("serverBusyNote")}</p>}
+            {multiplayer && authError && <p className="hint">{t("authErrorNote")}</p>}
           </section>
         </>
       ) : (
@@ -1266,34 +1505,14 @@ export default function App() {
       )}
 
       {preview && (
-        <div className="img-preview-overlay" onClick={() => setPreview(null)}>
-          <div className="img-preview-box" onClick={(e) => e.stopPropagation()}>
-            <p className="preview-guide">
-              {t("previewGuideA")}
-              <br />
-              {t("previewGuideB")}
-            </p>
-            <div className="preview-actions">
-              {typeof navigator.canShare === "function" &&
-                navigator.canShare({ files: [new File([preview.blob], preview.name, { type: "image/png" })] }) && (
-                  <button type="button" className="download-btn" onClick={sharePreview}>
-                    {t("previewShare")}
-                  </button>
-                )}
-              <button type="button" className="download-btn" onClick={openExternal}>
-                {t("previewOpenExternal")}
-              </button>
-              <button type="button" className="download-btn" onClick={copyTransferUrl}>
-                {t("previewCopyUrl")}
-              </button>
-            </div>
-            <img src={preview.src} alt={t("previewImgAlt")} />
-            <p className="preview-sub">{t("previewSub")}</p>
-            <button type="button" className="download-btn" onClick={() => setPreview(null)}>
-              {t("close")}
-            </button>
-          </div>
-        </div>
+        <ImagePreviewModal
+          preview={preview}
+          t={t}
+          onClose={() => setPreview(null)}
+          onShare={sharePreview}
+          onOpenExternal={openExternal}
+          onCopyUrl={copyTransferUrl}
+        />
       )}
     </div>
   );

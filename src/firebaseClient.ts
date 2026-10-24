@@ -5,7 +5,7 @@ import { getFirestore } from "firebase/firestore";
 
 // ───────────────────────── Firebase ─────────────────────────
 // (웹 API 키는 공개되어도 되는 값입니다. 실제 보호는 Firestore 규칙이 담당합니다.)
-export const firebaseConfig = {
+const firebaseConfig = {
   apiKey: "AIzaSyC1TjmcvbKHRWkUm1u8isrBzlBNLytXd0o",
   authDomain: "esmulti-fa048.firebaseapp.com",
   projectId: "esmulti-fa048",
