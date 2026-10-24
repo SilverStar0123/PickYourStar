@@ -641,14 +641,9 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
               stopTimerRef.current = null;
             }
           } else if (event.data === 5) {
-            if (pendingPlayRef.current) {
-              try {
-                event.target?.seekTo?.(startSecRef.current, true);
-                event.target?.playVideo?.();
-              } catch {
-                /* ignore */
-              }
-            }
+            // VIDEO_CUED에서는 재생을 또 요청하지 않습니다.
+            // 신규 영상은 loadVideoById가, 최초 생성은 onReady가 이미 재생을 요청합니다.
+            // 여기서 seekTo/playVideo를 반복하면 플레이어 상태 전환이 중복될 수 있습니다.
           } else if (event.data === 2 || event.data === 0) {
             if (!pendingPlayRef.current) {
               setIsPlayingAudio(false);
@@ -751,6 +746,9 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
 
   // 1초(또는 연장된 초) 재생 실행
   const playSnippet = (overrideSec?: number, overrideStart?: number, overrideSong?: SongItem) => {
+    // YouTube가 재생을 준비하거나 1초 구간을 틀고 있는 동안 중복 요청하지 않습니다.
+    // 같은 영상은 아래 ensurePlayerAndPlay에서 기존 iframe의 seekTo만 사용합니다.
+    if (pendingPlayRef.current) return;
     const targetSong = overrideSong ?? currentSong;
     if (!targetSong) return;
 
@@ -779,6 +777,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
 
   // +1초 늘리기 (최대 5초)
   const extendDuration = () => {
+    if (pendingPlayRef.current) return;
     const next = Math.min(5, clipDuration + 1);
     setClipDuration(next);
     playSnippet(next, startSec);
@@ -786,7 +785,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
 
   // 다른 1초 구간 뽑기
   const rerollSpot = () => {
-    if (!currentSong) return;
+    if (pendingPlayRef.current || !currentSong) return;
     const totalDur =
       playerRef.current && playerReadyRef.current && loadedVideoIdRef.current === currentSong.videoId
         ? Number(playerRef.current?.getDuration?.() || 0)
@@ -1306,7 +1305,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
               <button
                 type="button"
                 className={`sq-play-btn${isPlayingAudio ? " is-playing" : ""}`}
-                disabled={loadingAudio}
+                disabled={loadingAudio || isPlayingAudio}
                 onClick={() => playSnippet()}
               >
                 {loadingAudio
@@ -1317,11 +1316,11 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
               </button>
               <div className="sq-tools">
                 {clipDuration < 5 && (
-                  <button type="button" className="sq-pill" onClick={extendDuration}>
+                  <button type="button" className="sq-pill" disabled={loadingAudio || isPlayingAudio} onClick={extendDuration}>
                     {t("quizExtendSec", { sec: clipDuration + 1 })}
                   </button>
                 )}
-                <button type="button" className="sq-pill" onClick={rerollSpot}>
+                <button type="button" className="sq-pill" disabled={loadingAudio || isPlayingAudio} onClick={rerollSpot}>
                   {t("quizChangeSpot")}
                 </button>
               </div>

@@ -423,9 +423,13 @@
   font-weight: 600;
   cursor: pointer;
 }
-.sq-pill:hover {
+.sq-pill:hover:not(:disabled) {
   border-color: #ffb3b3;
   color: var(--sq-accent-dark);
+}
+.sq-pill:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 /* 정답 입력 */
