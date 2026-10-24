@@ -19,7 +19,7 @@ export const SPECIAL_UNIT_SECTIONS = [
   {
     id: "featured",
     labels: { ko: "활동 유닛", en: "Active Units", ja: "活動ユニット" },
-    units: ["Eve", "Adam", "Double Face", "프로듀서", "J&A"]
+    units: ["Eve", "Adam", "Double Face", "J&A",  "프로듀서"]
   },
   {
     id: "legacy",
