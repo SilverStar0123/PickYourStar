@@ -322,7 +322,7 @@
   color: var(--sq-accent-dark);
 }
 
-/* 영상: 문제를 푸는 동안은 화면 밖(소리만), 정답/포기 후 가로 폭 전체로 크게 */
+/* 정답 공개 후에만 영상 영역을 표시합니다. */
 .sq-video {
   position: fixed;
   left: -9999px;
