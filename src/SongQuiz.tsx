@@ -26,9 +26,10 @@ import {
   buildQuizShareUrl,
   buildTweetIntentUrl,
   parseQuizChallenge,
-  renderQuizResultBlob
+  renderQuizResultBlob,
+  summarizeQuizPlayRecords
 } from "./quizShare";
-import type { QuizResultInfo, ResultCardText, TopSongLine } from "./quizShare";
+import type { QuizResultInfo, ResultCardText } from "./quizShare";
 
 export interface SongItem {
   id: string;
@@ -157,27 +158,33 @@ function buildResultCardText(
   easy: boolean,
   percent: number,
   score: number,
-  ranked: { item: HistoryItem; idx: number }[],
+  history: HistoryItem[],
   lang: Lang
 ): ResultCardText {
-  // 점수 높은 정답 곡 3개 (포기한 곡은 제외)
-  const top: TopSongLine[] = ranked
-    .filter((x) => x.item.correct)
-    .slice(0, 3)
-    .map((x, i) => ({
-      rank: i + 1,
-      title: primaryTitle(x.item.song, lang),
-      meta: tt("quizSongMeta", { sec: x.item.clipSec, listens: x.item.listens, tries: x.item.tries }),
-      score: `${x.item.score}${tt("quizScoreUnit")}`
-    }));
+  const stats = summarizeQuizPlayRecords(history.map((h) => ({
+    correct: h.correct,
+    listens: h.listens,
+    tries: h.tries,
+    title: primaryTitle(h.song, lang)
+  })));
   return {
     title: tt("quizTitle"),
     rateLabel: tt("quizSummaryRateLabel"),
     detail: tt("quizSummaryScoreDetail", { total, correct }),
     modeLabel: easy ? tt("quizModeEasyShort") : tt("quizModeHardShort"),
     scoreText: tt("quizScoreLine", { score }),
-    topTitle: tt("quizShareTop3Title"),
-    top,
+    stats,
+    statsTitle: tt("quizCardStatsTitle"),
+    onceLabel: tt("quizCardOnce"),
+    repeatedLabel: tt("quizCardRepeated"),
+    unansweredLabel: tt("quizCardUnanswered"),
+    songsUnit: tt("quizCardSongsUnit"),
+    noAudioNote: tt("quizCardNoAudio", { count: stats.noAudio }),
+    hardestTitle: tt("quizCardHardest"),
+    hardestEmpty: tt("quizCardHardestEmpty"),
+    hardestMeta: stats.hardest ? tt("quizCardHardestMeta", {
+      listens: stats.hardest.listens, tries: stats.hardest.tries
+    }) : "",
     footer: window.location.host + window.location.pathname.replace(/\/$/, ""),
     percent
   };
@@ -978,7 +985,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       return;
     }
     let cancelled = false;
-    renderQuizResultBlob(buildResultCardText(tRef.current, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, rankedHistory, lang))
+    renderQuizResultBlob(buildResultCardText(tRef.current, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, history, lang))
       .then((b) => {
         if (!cancelled) resultBlobRef.current = b;
       })
@@ -988,7 +995,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     return () => {
       cancelled = true;
     };
-  }, [phase, questionQueue.length, correctTotal, accuracyPercent, totalScore, easyMode, lang, rankedHistory]);
+  }, [phase, questionQueue.length, correctTotal, accuracyPercent, totalScore, easyMode, lang, history]);
 
   const shareUrl = buildQuizShareUrl({ correct: correctTotal, total: questionQueue.length, easy: easyMode, score: totalScore });
   const tweetText = t("quizShareTweetText", {
@@ -1003,7 +1010,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const makeResultBlob = async (): Promise<Blob> => {
     if (resultBlobRef.current) return resultBlobRef.current;
     const b = await renderQuizResultBlob(
-      buildResultCardText(t, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, rankedHistory, lang)
+      buildResultCardText(t, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, history, lang)
     );
     resultBlobRef.current = b;
     return b;

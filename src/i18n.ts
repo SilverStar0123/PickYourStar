@@ -249,8 +249,15 @@ const ko = {
   quizHistorySortNote: "점수 높은 순",
   quizHistoryMore: "나머지 {n}곡 보기",
   quizHistoryLess: "접기",
-  quizShareTop3Title: "점수 높은 곡 TOP 3",
-  quizSongMeta: "{sec}초 · {listens}번 듣고 · {tries}번 만에 정답"
+  quizCardStatsTitle: "이번 판 플레이 기록",
+  quizCardOnce: "한 번 듣고 정답",
+  quizCardRepeated: "여러 번 듣고 정답",
+  quizCardUnanswered: "오답·포기",
+  quizCardSongsUnit: "곡",
+  quizCardNoAudio: "음원 재생 없이 맞힌 곡: {count}곡",
+  quizCardHardest: "가장 오래 고민한 정답",
+  quizCardHardestEmpty: "이번 판은 정답 곡이 없어요",
+  quizCardHardestMeta: "{listens}회 듣고 · {tries}회 시도",
 };
 
 export type MsgKey = keyof typeof ko;
@@ -468,8 +475,15 @@ const en: Record<MsgKey, string> = {
   quizHistorySortNote: "Highest score first",
   quizHistoryMore: "Show {n} more",
   quizHistoryLess: "Show less",
-  quizShareTop3Title: "Top 3 songs by score",
-  quizSongMeta: "{sec}s clip · played {listens}× · correct on try {tries}"
+  quizCardStatsTitle: "This round at a glance",
+  quizCardOnce: "Correct after 1 play",
+  quizCardRepeated: "Correct after 2+ plays",
+  quizCardUnanswered: "Unanswered",
+  quizCardSongsUnit: " songs",
+  quizCardNoAudio: "{count} solved with no playback",
+  quizCardHardest: "Most replayed correct song",
+  quizCardHardestEmpty: "No correct songs this round",
+  quizCardHardestMeta: "{listens} plays · {tries} tries",
 };
 
 const ja: Record<MsgKey, string> = {
@@ -685,8 +699,15 @@ const ja: Record<MsgKey, string> = {
   quizHistorySortNote: "スコアが高い順",
   quizHistoryMore: "残り{n}曲を表示",
   quizHistoryLess: "閉じる",
-  quizShareTop3Title: "スコアが高い曲 TOP3",
-  quizSongMeta: "{sec}秒 ・ {listens}回聴いて ・ {tries}回目で正解"
+  quizCardStatsTitle: "今回のプレイ記録",
+  quizCardOnce: "1回聴いて正解",
+  quizCardRepeated: "2回以上で正解",
+  quizCardUnanswered: "不正解・ギブアップ",
+  quizCardSongsUnit: "曲",
+  quizCardNoAudio: "再生なしで正解 {count}曲",
+  quizCardHardest: "最も繰り返し聴いた正解曲",
+  quizCardHardestEmpty: "今回は正解曲がありません",
+  quizCardHardestMeta: "{listens}回再生 · {tries}回挑戦",
 };
 
 const MESSAGES: Record<Lang, Record<MsgKey, string>> = { ko, en, ja };
