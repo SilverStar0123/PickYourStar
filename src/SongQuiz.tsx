@@ -346,6 +346,12 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const stopTimerRef = useRef<number | null>(null);
   const loadWatchdogRef = useRef<number | null>(null);
   const pendingPlayRef = useRef(false);
+  // 각 문제를 시작하자마자 YouTube 플레이어를 큐에 올려 놓습니다.
+  // cueVideoById는 음원을 미리 다운로드하거나 광고를 없애는 기능이 아닙니다.
+  const primeRequestRef = useRef<{ questionId: string; videoId: string; start: number } | null>(null);
+  const primeSerialRef = useRef(0);
+  const primeTimeoutRef = useRef<number | null>(null);
+  const [preparingAudio, setPreparingAudio] = useState(false);
   const activeVideoIdRef = useRef<string>("");
   const clipDurationRef = useRef(clipDuration);
   clipDurationRef.current = clipDuration;
@@ -462,6 +468,13 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     return minS + Math.floor(Math.random() * Math.max(1, maxS - minS));
   };
 
+  const clearPrimeTimeout = () => {
+    if (primeTimeoutRef.current !== null) {
+      window.clearTimeout(primeTimeoutRef.current);
+      primeTimeoutRef.current = null;
+    }
+  };
+
   const clearTimers = () => {
     if (stopTimerRef.current !== null) {
       window.clearTimeout(stopTimerRef.current);
@@ -475,7 +488,12 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
 
   const stopPlayerSafely = () => {
     clearTimers();
+    clearPrimeTimeout();
+    playReqRef.current += 1; // 이전 비동기 재생 요청 무효화
+    primeSerialRef.current += 1;
+    primeRequestRef.current = null;
     pendingPlayRef.current = false;
+    setPreparingAudio(false);
     setIsPlayingAudio(false);
     setLoadingAudio(false);
     try {
@@ -489,6 +507,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   useEffect(() => {
     return () => {
       clearTimers();
+      clearPrimeTimeout();
       if (wrongTimerRef.current !== null) window.clearTimeout(wrongTimerRef.current);
       try {
         playerRef.current?.destroy?.();
@@ -501,19 +520,45 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   }, []);
 
   // 플레이어를 만들거나(첫 실행) 이미 있으면 해당 영상을 재생
-  const ensurePlayerAndPlay = async (videoId: string, targetStart: number, durSec: number) => {
-    const reqId = ++playReqRef.current; // 연속으로 눌러도 가장 마지막 요청만 실행
-    listenCountedRef.current = false; // 이 요청에서 실제로 재생이 시작되면 한 번만 횟수에 더함
-    clearTimers();
-    setPlayerError(false);
-    setAutoplayBlocked(false);
-    clipDurationRef.current = durSec;
-    startSecRef.current = targetStart;
-    pendingPlayRef.current = true;
-    activeVideoIdRef.current = videoId; // 플레이어가 아직 준비 중이어도 onReady에서 이 값을 사용
-    setLoadingAudio(true);
+  const ensurePlayerAndPlay = async (
+    videoId: string,
+    targetStart: number,
+    durSec: number,
+    prepareOnly = false
+  ) => {
+    const reqId = prepareOnly ? playReqRef.current : ++playReqRef.current;
+    const primeSerial = prepareOnly ? ++primeSerialRef.current : primeSerialRef.current;
+    if (prepareOnly) {
+      // 문제 화면에 진입했을 때만 영상 정보를 미리 준비합니다. 소리는 재생하지 않습니다.
+      const song = currentSongRef.current;
+      if (!song || song.videoId !== videoId || pendingPlayRef.current) return;
+      primeRequestRef.current = { questionId: song.id, videoId, start: targetStart };
+      clearPrimeTimeout();
+      primeTimeoutRef.current = window.setTimeout(() => {
+        // 외부에서 YouTube를 차단해도 '준비 중' 문구가 무한히 남지 않도록 합니다.
+        if (primeSerial === primeSerialRef.current && !pendingPlayRef.current) {
+          primeSerialRef.current += 1;
+          primeRequestRef.current = null;
+          setPreparingAudio(false);
+        }
+      }, 15000);
+      setPreparingAudio(true);
+    } else {
+      clearPrimeTimeout();
+      primeRequestRef.current = null;
+      setPreparingAudio(false);
+      listenCountedRef.current = false; // 실제 PLAYING 이벤트를 받은 재생만 카운트
+      clearTimers();
+      setPlayerError(false);
+      setAutoplayBlocked(false);
+      clipDurationRef.current = durSec;
+      startSecRef.current = targetStart;
+      pendingPlayRef.current = true;
+      activeVideoIdRef.current = videoId;
+      setLoadingAudio(true);
+    }
 
-    loadWatchdogRef.current = window.setTimeout(() => {
+    if (!prepareOnly) loadWatchdogRef.current = window.setTimeout(() => {
       if (reqId !== playReqRef.current || !pendingPlayRef.current) return;
       // 준비는 됐지만 인앱 브라우저에서 실제 PLAYING 이벤트가 오지 않을 수도 있습니다.
       // 무한 로딩을 끝내고 다시 눌러 보거나 외부 브라우저로 열도록 안내합니다.
@@ -537,7 +582,13 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     try {
       YT = await loadYouTubeApi();
     } catch {
-      if (reqId === playReqRef.current) {
+      if (prepareOnly) {
+        if (primeSerial === primeSerialRef.current) {
+          clearPrimeTimeout();
+          primeRequestRef.current = null;
+          setPreparingAudio(false);
+        }
+      } else if (reqId === playReqRef.current) {
         clearTimers();
         pendingPlayRef.current = false;
         setLoadingAudio(false);
@@ -545,21 +596,48 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       }
       return;
     }
-    if (reqId !== playReqRef.current) return; // 그사이 더 새로운 요청이 있었음
+    if (reqId !== playReqRef.current || (prepareOnly && primeSerial !== primeSerialRef.current)) return;
     if (!playerHostRef.current) {
-      setLoadingAudio(false);
+      if (prepareOnly) {
+        clearPrimeTimeout();
+        setPreparingAudio(false);
+      } else setLoadingAudio(false);
       return;
     }
 
     if (playerRef.current) {
       if (!playerReadyRef.current) return; // 만드는 중이면 onReady에서 처리
       try {
+        if (prepareOnly) {
+          const nextCue = nextCuedRef.current;
+          const alreadyCued = nextCue !== null &&
+            nextCue.questionId === currentSongRef.current?.id &&
+            nextCue.videoId === videoId && nextCue.start === targetStart &&
+            playerRef.current.getPlayerState?.() === 5 &&
+            playerRef.current.getVideoData?.()?.video_id === videoId;
+          if (alreadyCued) {
+            clearPrimeTimeout();
+            primeRequestRef.current = null;
+            setPreparingAudio(false);
+          } else {
+            playerRef.current.pauseVideo?.();
+            loadedVideoIdRef.current = videoId;
+            nextCuedRef.current = {
+              questionId: currentSongRef.current!.id, videoId, start: targetStart
+            };
+            playerRef.current.cueVideoById({ videoId, startSeconds: targetStart });
+          }
+          return;
+        }
         const cued = nextCuedRef.current;
-        const matchesCue = cued?.questionId === currentSongRef.current?.id &&
+        const matchesCue = cued !== null &&
+          cued.questionId === currentSongRef.current?.id &&
           cued.videoId === videoId && cued.start === targetStart;
         // 이미 큐 준비가 끝났을 때만 playVideo로 시작합니다.
         // 아직 CUED가 아니라면 이전 cue 요청에 의존하지 않고 정상 로드를 시도합니다.
-        const cueIsReady = matchesCue && playerRef.current.getPlayerState?.() === 5;
+        const cueIsReady = matchesCue &&
+          playerRef.current.getPlayerState?.() === 5 &&
+          playerRef.current.getVideoData?.()?.video_id === videoId;
         nextCuedRef.current = null;
         if (cueIsReady) {
           playerRef.current.playVideo();
@@ -611,19 +689,25 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       events: {
         onReady: (event: any) => {
           playerReadyRef.current = true;
-          if (!pendingPlayRef.current) return;
           try {
-            const wanted = activeVideoIdRef.current;
-            if (wanted && wanted !== loadedVideoIdRef.current) {
-              loadedVideoIdRef.current = wanted;
-              event.target.loadVideoById({ videoId: wanted, startSeconds: startSecRef.current });
-            } else {
-              // iframe URL의 start 매개변수로 초기 구간을 지정했으므로
-              // 최초 준비 직후 중복 seekTo 요청 없이 한 번만 재생합니다.
-              event.target.playVideo();
+            if (pendingPlayRef.current) {
+              const wanted = activeVideoIdRef.current;
+              if (wanted && wanted !== loadedVideoIdRef.current) {
+                loadedVideoIdRef.current = wanted;
+                event.target.loadVideoById({ videoId: wanted, startSeconds: startSecRef.current });
+              } else {
+                event.target.playVideo();
+              }
+            } else if (primeRequestRef.current) {
+              const prime = primeRequestRef.current;
+              loadedVideoIdRef.current = prime.videoId;
+              nextCuedRef.current = { ...prime };
+              event.target.cueVideoById({ videoId: prime.videoId, startSeconds: prime.start });
             }
           } catch {
-            /* ignore */
+            clearPrimeTimeout();
+            primeRequestRef.current = null;
+            setPreparingAudio(false);
           }
         },
         onStateChange: (event: any) => {
@@ -669,9 +753,14 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
               stopTimerRef.current = null;
             }
           } else if (event.data === 5) {
-            // VIDEO_CUED에서는 재생을 또 요청하지 않습니다.
-            // 신규 영상은 loadVideoById가, 최초 생성은 onReady가 이미 재생을 요청합니다.
-            // 여기서 seekTo/playVideo를 반복하면 플레이어 상태 전환이 중복될 수 있습니다.
+            // 큐가 준비되어도 음원 스트림이 다운로드된 것은 아닙니다.
+            // 실제 재생은 사용자가 '1초 듣기'를 누른 뒤 시작됩니다.
+            if (primeRequestRef.current && !pendingPlayRef.current &&
+                event.target?.getVideoData?.()?.video_id === primeRequestRef.current.videoId) {
+              clearPrimeTimeout();
+              primeRequestRef.current = null;
+              setPreparingAudio(false);
+            }
           } else if (event.data === 2 || event.data === 0) {
             if (!pendingPlayRef.current) {
               setIsPlayingAudio(false);
@@ -694,6 +783,9 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
           loadedVideoIdRef.current = "";
           clearTimers();
           setAutoplayBlocked(false);
+          clearPrimeTimeout();
+          primeRequestRef.current = null;
+          setPreparingAudio(false);
           pendingPlayRef.current = false;
           setIsPlayingAudio(false);
           setLoadingAudio(false);
@@ -710,6 +802,15 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       }
     });
   };
+
+  // 새 문제가 화면에 표시되면, 버튼 클릭을 기다리는 동안 플레이어를 먼저 준비합니다.
+  // 이는 YouTube API/썸네일 준비이며 광고 제거 또는 음원 스트림 프리로드가 아닙니다.
+  useEffect(() => {
+    if (phase !== "playing" || status !== "playing" || !currentSong) return;
+    // 같은 곡을 다시 들을 때는 이 effect가 다시 실행되지 않습니다.
+    void ensurePlayerAndPlay(currentSong.videoId, startSec, 1, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, currentSong?.id, status]);
 
   // 정답/포기 화면에 머무르는 동안 다음 곡의 썸네일과 플레이어 상태를 미리 큐에 등록합니다.
   // 두 번째 iframe은 만들지 않으며, cueVideoById는 실제 음원 데이터를 미리 받지 않습니다.
@@ -1363,6 +1464,11 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
                   ? t("quizPlaying")
                   : t("quizPlayClip", { sec: clipDuration })}
               </button>
+              {preparingAudio && !loadingAudio && !isPlayingAudio && (
+                <p className="sq-preparing" role="status" aria-live="polite">
+                  {t("quizLoadingAudio")}
+                </p>
+              )}
               <div className="sq-tools">
                 {clipDuration < 5 && (
                   <button type="button" className="sq-pill" disabled={loadingAudio || isPlayingAudio} onClick={extendDuration}>
