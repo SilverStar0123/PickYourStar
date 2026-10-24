@@ -3,6 +3,7 @@
 // 퓨전곡: 정규 유닛 둘 이상을 &, ×, VS 등으로 연결한 이름 또는 명시적 퓨전곡 분류
 // 콜라보곡: 아래 지정된 곡 제목은 유닛 구성에 관계없이 콜라보곡으로 우선 분류
 // 솔로곡: songs.csv의 unit이 ES_list.csv의 캐릭터 이름(한국어/영어/일본어)과 일치하는 곡
+// J&A: 셔플곡과 구분해 기타 곡의 독립 태그로 표시
 // 셔플곡: 앞선 분류 어디에도 속하지 않는 나머지 모든 유닛명
 // songs.csv의 원래 unit 값은 SongItem.rawUnit에 그대로 보관한다.
 
@@ -10,6 +11,7 @@ export const SHUFFLE_UNIT_ID = "__shuffle__";
 export const FUSION_UNIT_ID = "__fusion__";
 export const COLLAB_UNIT_ID = "__collab__";
 export const SOLO_UNIT_ID = "__solo__";
+export const JA_UNIT_ID = "__ja__";
 
 interface OfficialUnitName {
   id: string;
@@ -66,6 +68,9 @@ export function classifyQuizUnit(rawName: string, officialAliases: ReadonlyMap<s
   const canonicalUnit = officialAliases.get(key);
   if (canonicalUnit) return canonicalUnit;
 
+  // J&A는 기타 곡의 독립 카테고리. 전각 ＆ 및 공백 표기도 허용합니다.
+  if (/^j\s*&\s*a$/.test(key)) return JA_UNIT_ID;
+
   if (EXPLICIT_COLLAB_LABELS.has(key)) return COLLAB_UNIT_ID;
   if (EXPLICIT_FUSION_LABELS.has(key)) return FUSION_UNIT_ID;
   if (EXPLICIT_SHUFFLE_LABELS.has(key)) return SHUFFLE_UNIT_ID;
@@ -93,7 +98,7 @@ export const COLLAB_SONG_TITLES: readonly string[] = [
 
 const collabTitleKeys = new Set(COLLAB_SONG_TITLES.map(nameKey));
 
-/** 콜라보곡 제목 → 캐릭터 개인 솔로곡 → 정규 유닛/퓨전/셔플 순서로 판별. */
+/** 콜라보곡 제목 → 캐릭터 개인 솔로곡 → 정규 유닛/J&A/퓨전/셔플 순서로 판별. */
 export function classifyQuizSongUnit(
   rawUnit: string,
   titleKo: string,

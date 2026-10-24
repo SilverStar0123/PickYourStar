@@ -3,8 +3,8 @@ import type { Lang, MsgKey } from "./i18n";
 import type { Agency } from "./types";
 import { loadAgencies, loadCsv, stripQuotes } from "./csv";
 import { localizeAgencies } from "./localize";
-import { SHUFFLE_UNIT_ID, FUSION_UNIT_ID, COLLAB_UNIT_ID, SOLO_UNIT_ID, classifyQuizSongUnit, makeOfficialUnitAliases, makeSoloArtistAliases } from "./quizUnits";
-export { SHUFFLE_UNIT_ID, FUSION_UNIT_ID, COLLAB_UNIT_ID, SOLO_UNIT_ID } from "./quizUnits";
+import { SHUFFLE_UNIT_ID, FUSION_UNIT_ID, COLLAB_UNIT_ID, SOLO_UNIT_ID, JA_UNIT_ID, classifyQuizSongUnit, makeOfficialUnitAliases, makeSoloArtistAliases } from "./quizUnits";
+export { SHUFFLE_UNIT_ID, FUSION_UNIT_ID, COLLAB_UNIT_ID, SOLO_UNIT_ID, JA_UNIT_ID } from "./quizUnits";
 import "./quiz.css";
 import ImagePreviewModal from "./components/ImagePreviewModal";
 import { withTimeout, copyText } from "./utils";
@@ -221,7 +221,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const [countPreset, setCountPreset] = useState<5 | 10 | 30 | "custom">(10);
   const [customCountInput, setCustomCountInput] = useState<string>("15");
 
-  // 선택된 유닛 필터 (16개 정규 유닛 + 셔플곡 + 퓨전곡 + 콜라보곡 + 솔로곡)
+  // 선택된 유닛 필터 (16개 정규 유닛 + 셔플곡 + 퓨전곡 + 콜라보곡 + 솔로곡 + J&A)
   const allUnits = useMemo(() => {
     const base = quizAgencies.flatMap((a) => a.groups.map((g) => ({ id: g.id, name: g.name })));
     // 셔플곡이 1곡이라도 있으면 '셔플곡' 필터 버튼 추가
@@ -238,13 +238,16 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     if (songs.some((s) => s.unit === SOLO_UNIT_ID)) {
       base.push({ id: SOLO_UNIT_ID, name: tRef.current("quizSoloUnit") });
     }
+    if (songs.some((s) => s.unit === JA_UNIT_ID)) {
+      base.push({ id: JA_UNIT_ID, name: tRef.current("quizJAUnit") });
+    }
     return base;
   }, [quizAgencies, songs, lang]);
 
   // 정규 유닛은 현재 유닛의 소속사별로, 나머지는 별도 섹션에 표시합니다.
   // 이 목록은 필터 UI 전용이므로 출제/정답 판정 및 선택 상태에 영향을 주지 않습니다.
   const otherQuizUnits = useMemo(() => {
-    const categoryIds = new Set([SHUFFLE_UNIT_ID, FUSION_UNIT_ID, COLLAB_UNIT_ID, SOLO_UNIT_ID]);
+    const categoryIds = new Set([SHUFFLE_UNIT_ID, FUSION_UNIT_ID, COLLAB_UNIT_ID, SOLO_UNIT_ID, JA_UNIT_ID]);
     return allUnits.filter((unit) => categoryIds.has(unit.id));
   }, [allUnits]);
 
@@ -257,6 +260,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     m[FUSION_UNIT_ID] = tRef.current("quizFusionUnit");
     m[COLLAB_UNIT_ID] = tRef.current("quizCollabUnit");
     m[SOLO_UNIT_ID] = tRef.current("quizSoloUnit");
+    m[JA_UNIT_ID] = tRef.current("quizJAUnit");
     return m;
   }, [allUnits, lang]);
 
