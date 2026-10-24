@@ -335,6 +335,8 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const listenCountedRef = useRef(false);
   const playReqRef = useRef(0); // 재생 요청 번호 (연속 클릭 시 마지막 요청만 실행)
   const loadedVideoIdRef = useRef<string>(""); // 플레이어에 실제로 올라가 있는 영상
+  // 정답 공개 화면에서 다음 곡을 같은 플레이어에 cue (음원 미리 다운로드는 하지 않음).
+  const nextCuedRef = useRef<{ questionId: string; videoId: string; start: number } | null>(null);
 
   // 플레이어 상태
   const playerRef = useRef<any>(null);
@@ -552,7 +554,16 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     if (playerRef.current) {
       if (!playerReadyRef.current) return; // 만드는 중이면 onReady에서 처리
       try {
-        if (loadedVideoIdRef.current !== videoId) {
+        const cued = nextCuedRef.current;
+        const matchesCue = cued?.questionId === currentSongRef.current?.id &&
+          cued.videoId === videoId && cued.start === targetStart;
+        // 이미 큐 준비가 끝났을 때만 playVideo로 시작합니다.
+        // 아직 CUED가 아니라면 이전 cue 요청에 의존하지 않고 정상 로드를 시도합니다.
+        const cueIsReady = matchesCue && playerRef.current.getPlayerState?.() === 5;
+        nextCuedRef.current = null;
+        if (cueIsReady) {
+          playerRef.current.playVideo();
+        } else if (loadedVideoIdRef.current !== videoId || matchesCue) {
           loadedVideoIdRef.current = videoId;
           playerRef.current.loadVideoById({ videoId, startSeconds: targetStart });
         } else {
@@ -679,6 +690,8 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
           setPlayerError(true);
         },
         onError: () => {
+          nextCuedRef.current = null;
+          loadedVideoIdRef.current = "";
           clearTimers();
           setAutoplayBlocked(false);
           pendingPlayRef.current = false;
@@ -698,12 +711,33 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     });
   };
 
+  // 정답/포기 화면에 머무르는 동안 다음 곡의 썸네일과 플레이어 상태를 미리 큐에 등록합니다.
+  // 두 번째 iframe은 만들지 않으며, cueVideoById는 실제 음원 데이터를 미리 받지 않습니다.
+  const cueFollowingQuestion = () => {
+    nextCuedRef.current = null;
+    const next = questionQueue[questionIdx + 1];
+    if (!next || !playerRef.current || !playerReadyRef.current) return;
+    const start = pickRandomStart(next);
+    try {
+      playerRef.current.pauseVideo?.();
+      playerRef.current.cueVideoById({ videoId: next.videoId, startSeconds: start });
+      loadedVideoIdRef.current = next.videoId;
+      nextCuedRef.current = { questionId: next.id, videoId: next.videoId, start };
+    } catch {
+      // 큐 준비가 실패해도 다음 문제에서 기존 loadVideoById 경로로 재생합니다.
+      nextCuedRef.current = null;
+      loadedVideoIdRef.current = "";
+    }
+  };
+
   // 특정 문제 객체로 화면 상태 세팅
   const loadQuestionItem = (song: SongItem) => {
     stopPlayerSafely();
     setPlayerError(false);
     setAutoplayBlocked(false);
-    const initialStart = pickRandomStart(song);
+    const cued = nextCuedRef.current;
+    if (cued?.questionId !== song.id) nextCuedRef.current = null;
+    const initialStart = cued?.questionId === song.id ? cued.start : pickRandomStart(song);
     currentSongRef.current = song;
     setCurrentSong(song);
     setClipDuration(1);
@@ -742,6 +776,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     runIdRef.current = generateRoomId();
     completedRunRef.current = "";
     trackAnalyticsEvent("quiz_started", { difficulty: easyMode ? "easy" : "hard", question_count: count, pool_type: pool });
+    nextCuedRef.current = null;
     setQuestionQueue(finalQueue);
     setQuestionIdx(0);
     setHistory([]);
@@ -753,6 +788,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const handleNextOrFinish = () => {
     const nextIdx = questionIdx + 1;
     if (nextIdx >= questionQueue.length) {
+      nextCuedRef.current = null;
       stopPlayerSafely();
       setPhase("summary");
     } else {
@@ -823,10 +859,8 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     setShowSuggestions(false);
 
     if (isCorrectGuess(value, currentSong)) {
-      clearTimers();
-      pendingPlayRef.current = false;
-      setIsPlayingAudio(false);
-      setLoadingAudio(false);
+      stopPlayerSafely();
+      cueFollowingQuestion();
       setStatus("correct");
       setHistory((prev) => [...prev, {
           song: currentSong,
@@ -851,10 +885,8 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   // 포기 / 정답 보기
   const handleGiveUp = () => {
     if (!currentSong || status !== "playing") return;
-    clearTimers();
-    pendingPlayRef.current = false;
-    setIsPlayingAudio(false);
-    setLoadingAudio(false);
+    stopPlayerSafely();
+    cueFollowingQuestion();
     setStatus("giveup");
     setHistory((prev) => [...prev, { song: currentSong, correct: false, tries, clipSec: clipDuration, score: 0, listens: listenCount }]);
   };
