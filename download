@@ -1,0 +1,4 @@
+
+# Firebase Admin private keys (절대 GitHub에 올리지 마세요)
+*serviceAccount*.json
+*.private-key.json
