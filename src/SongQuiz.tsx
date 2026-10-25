@@ -708,7 +708,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       }
     }
 
-    // YouTube 공식 개인정보 보호 강화 모드: iframe URL의 도메인을 직접 지정합니다.
+    // 일반 YouTube 임베드: 로그인 상태를 사용할 수 있도록 youtube.com을 사용합니다.
     // 광고 제거 기능은 아니며, IFrame API는 계속 공식 API를 사용합니다.
     // 별도 iframe을 만들면 YT.Player의 비공식 host 옵션에 의존하지 않아도 됩니다.
     const iframe = document.createElement("iframe");
@@ -721,7 +721,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       autoplay: "0",
       start: String(Math.floor(targetStart))
     });
-    iframe.src = `https://www.youtube-nocookie.com/embed/${videoId}?${params.toString()}`;
+    iframe.src = `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
     iframe.title = "YouTube video player";
     iframe.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture; fullscreen");
     iframe.setAttribute("allowfullscreen", "");
@@ -1675,7 +1675,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
               <iframe
                 key={currentSong.id}
                 title="YouTube answer video"
-                src={`https://www.youtube-nocookie.com/embed/${currentSong.videoId}?start=${Math.floor(startSec)}&playsinline=1&rel=0`}
+                src={`https://www.youtube.com/embed/${currentSong.videoId}?start=${Math.floor(startSec)}&playsinline=1&rel=0`}
                 allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                 allowFullScreen
                 style={{ width: "100%", height: "100%", border: 0 }}
