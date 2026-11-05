@@ -2,6 +2,7 @@
 // 서버(Firebase)를 쓰지 않으므로 사용량이 늘지 않습니다.
 
 export interface QuizResultInfo {
+  clipMode?: "random" | "start";
   correct: number;
   total: number;
   easy: boolean; // true = 초보자 모드, false = 하드 모드
@@ -21,7 +22,7 @@ export function buildQuizNativeShareText(text: string): string {
 export function buildQuizShareUrl(r: QuizResultInfo): string {
   const base = `${window.location.origin}${window.location.pathname}`;
   const score = typeof r.score === "number" ? `-${Math.max(0, Math.min(100, Math.round(r.score)))}` : "";
-  return `${base}#/quiz?r=${r.correct}-${r.total}-${r.easy ? "e" : "h"}${score}`;
+  return `${base}#/quiz?r=${r.correct}-${r.total}-${r.easy ? "e" : "h"}${score}${r.clipMode === "start" ? "&clip=start" : ""}`;
 }
 
 // 주소의 해시에서 친구 기록을 읽음. 형식이 맞지 않거나 말이 안 되는 숫자면 무시(주소는 누구나 고칠 수 있으므로 검증)
@@ -35,7 +36,8 @@ export function parseQuizChallenge(hash: string): QuizResultInfo | null {
   if (total < 1 || total > 100 || correct > total) return null;
   const score = m[4] === undefined ? undefined : Number(m[4]);
   if (score !== undefined && score > 100) return null;
-  return score === undefined ? { correct, total, easy: m[3] === "e" } : { correct, total, easy: m[3] === "e", score };
+  const clip = new URLSearchParams(q).get("clip") === "start" ? { clipMode: "start" as const } : {};
+  return score === undefined ? { correct, total, easy: m[3] === "e", ...clip } : { correct, total, easy: m[3] === "e", score, ...clip };
 }
 
 // X 글쓰기 창 주소 (공식 Web Intent). 이미지는 이 주소로 첨부할 수 없어서 글과 링크만 채워 줍니다.
