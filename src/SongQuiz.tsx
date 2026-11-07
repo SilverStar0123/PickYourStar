@@ -170,6 +170,8 @@ function buildResultCardText(
     correct: h.correct,
     listens: h.listens,
     tries: h.tries,
+    clipSec: h.clipSec,
+    score: h.score,
     title: primaryTitle(h.song, lang)
   })));
   return {
@@ -180,9 +182,9 @@ function buildResultCardText(
     scoreText: tt("quizScoreLine", { score }),
     stats,
     statsTitle: tt("quizCardStatsTitle"),
-    onceLabel: tt("quizCardOnce"),
-    repeatedLabel: tt("quizCardRepeated"),
-    unansweredLabel: tt("quizCardUnanswered"),
+    onceLabel: tt("quizBreakdownPerfect"),
+    repeatedLabel: tt("quizBreakdownOther"),
+    unansweredLabel: tt("quizBreakdownGiveup"),
     songsUnit: tt("quizCardSongsUnit"),
     noAudioNote: tt("quizCardNoAudio", { count: stats.noAudio }),
     hardestTitle: tt("quizCardHardest"),
@@ -1350,7 +1352,6 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   // 지금까지 연속으로 맞힌 문제 수 (정답 직후 연출용)
   let streak = 0;
   for (let i = history.length - 1; i >= 0 && history[i].correct; i--) streak += 1;
-  const resultBlobRef = useRef<Blob | null>(null); // 결과 화면이 뜨면 미리 만들어 둠 (공유 창은 클릭 직후에 열어야 해서)
 
   // 공유 링크로 들어왔다면 친구 기록은 화면에 안내만 하고 주소에서는 지움 (이 주소를 다시 공유해도 남의 기록이 따라가지 않게)
   useEffect(() => {
@@ -1365,25 +1366,6 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     };
   }, []);
 
-  // 결과 화면이 뜨면 이미지를 미리 그려 둠
-  useEffect(() => {
-    if (phase !== "summary") {
-      resultBlobRef.current = null;
-      return;
-    }
-    let cancelled = false;
-    renderQuizResultBlob(buildResultCardText(tRef.current, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, history, lang, clipMode))
-      .then((b) => {
-        if (!cancelled) resultBlobRef.current = b;
-      })
-      .catch(() => {
-        /* 저장 버튼을 누를 때 다시 시도 */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [phase, questionQueue.length, correctTotal, accuracyPercent, totalScore, easyMode, lang, history, clipMode]);
-
   const shareUrl = buildQuizShareUrl({ correct: correctTotal, total: questionQueue.length, easy: easyMode, score: totalScore, clipMode });
   const tweetText = t("quizShareTweetText", {
     title: t("quizTitle"),
@@ -1395,11 +1377,9 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   });
   const tweetUrl = buildTweetIntentUrl({ text: tweetText, url: shareUrl, hashtags: QUIZ_SHARE_HASHTAGS });
   const makeResultBlob = async (): Promise<Blob> => {
-    if (resultBlobRef.current) return resultBlobRef.current;
     const b = await renderQuizResultBlob(
       buildResultCardText(t, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, history, lang, clipMode)
     );
-    resultBlobRef.current = b;
     return b;
   };
 

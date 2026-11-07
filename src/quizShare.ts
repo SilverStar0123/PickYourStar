@@ -1,3 +1,5 @@
+import { summarizeHistory } from "./quizScore";
+import type { ScoredItem } from "./quizScore";
 // 노래 맞추기 결과 공유: 결과 이미지 그리기, 공유 링크, X(트위터) 글쓰기 주소
 // 서버(Firebase)를 쓰지 않으므로 사용량이 늘지 않습니다.
 
@@ -47,8 +49,8 @@ export function buildTweetIntentUrl(o: { text: string; url: string; hashtags?: s
   return `https://x.com/intent/tweet?${q}`;
 }
 
-// 결과 이미지용 기록 통계. 모든 판정은 각 문제의 실제 재생 횟수를 기준으로 합니다.
-export interface QuizPlayRecord {
+// 결과 화면 및 저장 데이터와 같은 점수 집계 함수를 사용합니다.
+export interface QuizPlayRecord extends ScoredItem {
   correct: boolean;
   listens: number;
   tries: number;
@@ -56,37 +58,32 @@ export interface QuizPlayRecord {
 }
 
 export interface QuizPlaySummary {
-  once: number; // 정확히 한 번 재생한 뒤 정답
-  repeated: number; // 두 번 이상 재생한 뒤 정답
+  once: number; // 1초 구간, 첫 답안에 정답 (화면 perfect와 동일)
+  repeated: number; // 그 외 정답 (화면 otherCorrect와 동일)
   unanswered: number; // 오답/포기
   noAudio: number; // 재생하지 않고 맞힌 정답 (별도 안내)
   hardest: { title: string; listens: number; tries: number } | null;
 }
 
 export function summarizeQuizPlayRecords(records: QuizPlayRecord[]): QuizPlaySummary {
-  let once = 0;
-  let repeated = 0;
-  let unanswered = 0;
+  const summary = summarizeHistory(records, records.length);
   let noAudio = 0;
   let hardest: QuizPlaySummary["hardest"] = null;
 
   records.forEach((r) => {
     if (!r.correct) {
-      unanswered += 1;
       return;
     }
     const listens = Number.isFinite(r.listens) ? Math.max(0, Math.trunc(r.listens)) : 0;
     const tries = Number.isFinite(r.tries) ? Math.max(0, Math.trunc(r.tries)) : 0;
     if (listens === 0) noAudio += 1;
-    else if (listens === 1) once += 1;
-    else repeated += 1;
 
     // 가장 많은 횟수로 재생한 정답. 재생 횟수가 같으면 더 많이 시도한 곡을 선택.
     if (!hardest || listens > hardest.listens || (listens === hardest.listens && tries > hardest.tries)) {
       hardest = { title: r.title, listens, tries };
     }
   });
-  return { once, repeated, unanswered, noAudio, hardest };
+  return { once: summary.perfect, repeated: summary.otherCorrect, unanswered: summary.giveup, noAudio, hardest };
 }
 
 export interface ResultCardText {
