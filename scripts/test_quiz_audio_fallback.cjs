@@ -13,7 +13,7 @@ Object.defineProperty(global, 'navigator', { configurable: true, value: dom.wind
 window.matchMedia = () => ({ matches: false });
 window.HTMLElement.prototype.scrollIntoView = () => {};
 const clock = FakeTimers.withGlobal(window).install({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-global.fetch = async () => ({ ok: true, json: async () => ({ videos: {} }) });
+global.fetch = async (url) => String(url).includes('.mp3') ? new Response(new Uint8Array([1,2,3]), {headers:{'content-type':'audio/mpeg'}}) : ({ ok: true, json: async () => String(url).endsWith('audio-config.json') ? { baseUrl: 'https://audio.example' } : { videos: {} } });
 const sourceRoot = path.resolve(__dirname, '../src');
 for (const ext of ['.ts', '.tsx']) require.extensions[ext] = (mod, file) => {
   mod._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: {
@@ -71,17 +71,38 @@ const click = async (key) => flush(() => {
   const button = [...document.querySelectorAll('button')].find(b => b.textContent.startsWith(key));
   assert.ok(button, `button ${key}`); assert.equal(button.disabled, false, `${key} enabled`); button.click();
 });
-async function start(audio = true) {
+async function start(audio = true, clipMode = "random", startSeconds = "15") {
   if (root) await flush(() => root.unmount());
   audios = []; players = []; clock.reset();
-  row = { unit: 'fine', title_ko: 'Test Song', title_en: 'Test Song', youtube: 'abcdefghijk', start_min: '15', end_max: '100', audio_url: audio ? 'audio/test.mp3' : '' };
+  row = { unit: 'fine', title_ko: 'Test Song', title_en: 'Test Song', youtube: 'abcdefghijk', start_min: startSeconds, end_max: '100', audio_url: audio ? 'audio/test.mp3' : '' };
   root = createRoot(document.getElementById('root'));
   await flush(() => root.render(React.createElement(SongQuiz, { lang: 'en', t: (key, args) => key + (args ? JSON.stringify(args) : '') })));
+  if (clipMode === 'start') await click('quizClipStart');
   await click('quizStartBtn');
 }
 (async () => {
+  // CSV start mode is exact, including zero/fractions, and survives MP3 fallback.
+  for (const startSeconds of ['0', '15', '12.5']) {
+    await start(true, 'start', startSeconds);
+    assert.ok(audios[0].src.startsWith('blob:'));
+    assert.ok(![...document.querySelectorAll('button')].some(b => b.textContent === 'quizChangeSpot'));
+    await flush(() => audios[0].emit('canplay')); await click('quizPlayClip');
+    assert.equal(audios[0].currentTime, Number(startSeconds));
+    await flush(() => audios[0].emit('playing'));
+    await flush(() => { audios[0].currentTime += 1; clock.tick(25); });
+    assert.equal(audios[0].paused, true);
+    await click('quizExtendSec'); assert.equal(audios[0].currentTime, Number(startSeconds));
+    await flush(() => audios[0].emit('error')); await flush(() => players[0].ready());
+    assert.equal(players[0].start, Number(startSeconds));
+  }
+  await start(false, 'start', '145');
+  await flush(() => players[0].ready()); await click('quizPlayClip');
+  assert.equal(players[0].start, 145, 'start mode must not rerandomize near video end');
+  await start(true, 'random');
+  assert.ok([...document.querySelectorAll('button')].some(b => b.textContent === 'quizChangeSpot'));
+
   // Successful files use Audio exclusively and stop at the requested position.
-  await start(); assert.equal(audios.length, 1); assert.equal(players.length, 0);
+  await start(); assert.ok(audios[0].src.startsWith('blob:'), 'play from cached Blob'); assert.equal(audios.length, 1); assert.equal(players.length, 0);
   await flush(() => audios[0].emit('canplay'));
   await click('quizPlayClip'); assert.equal(audios[0].playCalls, 1);
   await flush(() => audios[0].emit('playing'));
@@ -128,7 +149,7 @@ async function start(audio = true) {
   await flush(() => players[0].ready()); assert.equal(players[0].plays, 1);
 
   // Preparation timeout does not autoplay.
-  await start(); await flush(() => clock.tick(8000));
+  await start(); await flush(() => clock.tick(25000));
   assert.equal(players.length, 1); assert.equal(players[0].plays, 0);
 
   // Playback timeout automatically continues on YouTube.
@@ -137,7 +158,7 @@ async function start(audio = true) {
   await flush(() => players[0].ready()); assert.equal(players[0].plays, 1);
 
   // Leaving the question cancels failure timers/listeners and pending play promises.
-  await start(); const oldAudio = audios[0]; await click('quizPlayClip'); await click('quizBackToSetup');
+  await start(); const oldAudio = audios[0]; await flush(() => oldAudio.emit('canplay')); await click('quizPlayClip'); await click('quizBackToSetup');
   await flush(() => { oldAudio.emit('error'); clock.tick(16000); }); assert.equal(players.length, 0);
 
   // Songs without local files retain YouTube behavior.

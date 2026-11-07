@@ -1,0 +1,17 @@
+const assert = require('node:assert/strict');
+const ts = require('typescript'), fs = require('node:fs');
+require.extensions['.ts'] = (mod, file) => mod._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019 } }).outputText, file);
+const { parseStartSeconds, chooseClipStart, resolveQuizAudioUrl } = require('../src/quizPlayback.ts');
+for (const [input, output] of [['0', 0], ['12.5', 12.5], ['', 15], ['abc', 15], ['-1', 15], ['Infinity', 15]]) assert.equal(parseStartSeconds(input), output);
+assert.equal(chooseClipStart({ startMin: 15, endMax: 100 }, 'random', undefined, () => .5), 57);
+assert.equal(chooseClipStart({ startMin: 15, endMax: 100 }, 'start', undefined, () => { throw Error('random must not be used'); }), 15);
+assert.equal(resolveQuizAudioUrl('audio/한글 #%.mp3', 'https://audio.example'), 'https://audio.example/audio/' + encodeURIComponent('한글 #%.mp3'));
+assert.equal(resolveQuizAudioUrl('', 'https://audio.example'), undefined);
+assert.equal(resolveQuizAudioUrl('audio/a.mp3', '', '/PickYourStar'), '/PickYourStar/audio/a.mp3');
+assert.equal(resolveQuizAudioUrl('https://other.example/a.mp3', 'https://audio.example'), 'https://other.example/a.mp3');
+global.window = { location: { origin: 'https://site.example', pathname: '/' } };
+const { buildQuizShareUrl, parseQuizChallenge } = require('../src/quizShare.ts');
+const record = { correct: 3, total: 5, easy: true, score: 60, clipMode: 'start' };
+assert.deepEqual(parseQuizChallenge(buildQuizShareUrl(record).split('#')[1]), record);
+assert.deepEqual(parseQuizChallenge('#/quiz?r=3-5-e-60'), { correct: 3, total: 5, easy: true, score: 60 });
+console.log('PASS: start parsing, random regression, URL encoding/config, backwards-compatible mode sharing');
