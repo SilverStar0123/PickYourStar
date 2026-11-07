@@ -1,3 +1,4 @@
+import { loadQuizAudio, forgetQuizAudio } from "./quizAudioCache";
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import type { Lang, MsgKey } from "./i18n";
 import type { Agency } from "./types";
@@ -6,8 +7,6 @@ import { localizeAgencies } from "./localize";
 import { SHUFFLE_UNIT_ID, FUSION_UNIT_ID, COLLAB_UNIT_ID, SOLO_UNIT_ID, JA_UNIT_ID, classifyQuizSongUnit, makeOfficialUnitAliases, makeSoloArtistAliases } from "./quizUnits";
 export { SHUFFLE_UNIT_ID, FUSION_UNIT_ID, COLLAB_UNIT_ID, SOLO_UNIT_ID, JA_UNIT_ID } from "./quizUnits";
 import "./quiz.css";
-import { chooseClipStart, parseStartSeconds, resolveQuizAudioUrl } from "./quizPlayback";
-import type { ClipMode } from "./quizPlayback";
 import ImagePreviewModal from "./components/ImagePreviewModal";
 import { withTimeout, copyText } from "./utils";
 import { triggerDownload, blobToDataUrl } from "./imageExport";
@@ -162,8 +161,7 @@ function buildResultCardText(
   percent: number,
   score: number,
   history: HistoryItem[],
-  lang: Lang,
-  clipMode: ClipMode
+  lang: Lang
 ): ResultCardText {
   const stats = summarizeQuizPlayRecords(history.map((h) => ({
     correct: h.correct,
@@ -175,7 +173,7 @@ function buildResultCardText(
     title: tt("quizTitle"),
     rateLabel: tt("quizSummaryRateLabel"),
     detail: tt("quizSummaryScoreDetail", { total, correct }),
-    modeLabel: `${easy ? tt("quizModeEasyShort") : tt("quizModeHardShort")} · ${tt(clipMode === "start" ? "quizClipStart" : "quizClipRandom")}`,
+    modeLabel: easy ? tt("quizModeEasyShort") : tt("quizModeHardShort"),
     scoreText: tt("quizScoreLine", { score }),
     stats,
     statsTitle: tt("quizCardStatsTitle"),
@@ -220,7 +218,6 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
 
   // 난이도: true = 초보자 모드(자동완성 후보 표시), false = 하드 모드(직접 입력 + 부호/대소문자 보정)
   const [easyMode, setEasyMode] = useState<boolean>(true);
-  const [clipMode, setClipMode] = useState<ClipMode>("random");
 
   // 문제 수 설정: 5, 10, 30, 또는 "custom"
   const [countPreset, setCountPreset] = useState<5 | 10 | 30 | "custom">(10);
@@ -322,18 +319,16 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     const pool = runPoolRef.current;
     trackAnalyticsEvent("quiz_completed", {
       difficulty: mode,
-      clip_mode: clipMode,
       question_count: questionQueue.length,
       pool_type: pool,
       score: summary.score
     });
-    if (clipMode === "start") return;
     void saveQuizCompletion({
       attemptId: runId, mode, questionCount: questionQueue.length, pool,
       score: summary.score, perfect: summary.perfect,
       otherCorrect: summary.otherCorrect, giveup: summary.giveup
     }).catch((err) => console.warn("퀴즈 점수 저장 실패 (게임은 정상 진행):", err));
-  }, [phase, status, history, questionQueue.length, easyMode, clipMode]);
+  }, [phase, status, history, questionQueue.length, easyMode]);
   const [wrongShake, setWrongShake] = useState(false);
   const [guess, setGuess] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -398,29 +393,30 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       try {
         // 앱에서 현재 보고 있던 시트의 agencies를 받지 않고, 항상 unit 기반 16개 유닛을 로드합니다.
         // Firestore 요청은 발생하지 않으며 CSV는 배포 버전별 브라우저 캐시를 재사용합니다.
-        const [currentAgencies, memberRows, songRows, audioManifest, audioConfig] = await Promise.all([
+        const [currentAgencies, memberRows, songRows, audioManifest] = await Promise.all([
           loadAgencies(), loadCsv("ES_list.csv"), loadCsv("songs.csv"),
           // 없는 경우 빈 목록으로 처리: 기존 YouTube 퀴즈를 망가뜨리지 않습니다.
           fetch(`${process.env.PUBLIC_URL || "."}/audio-manifest.json`)
             .then(async (response) => response.ok ? await response.json() : {})
             .then((value) => (value && typeof value === "object" && !Array.isArray(value))
               ? (value as Record<string, unknown>) : {})
-            .catch(() => ({} as Record<string, unknown>)),
-          fetch(`${process.env.PUBLIC_URL || "."}/audio-config.json`)
-            .then(async (response) => response.ok ? await response.json() : {})
-            .catch(() => ({}))
+            .catch(() => ({} as Record<string, unknown>))
         ]);
         const availableAudio = (audioManifest.videos && typeof audioManifest.videos === "object")
           ? audioManifest.videos as Record<string, string>
           : {};
-        let audioBaseUrl = typeof audioConfig?.baseUrl === "string" ? audioConfig.baseUrl.trim() : "";
-        try {
-          if (audioBaseUrl && new URL(audioBaseUrl).protocol !== "https:") throw new Error("HTTPS required");
-        } catch {
-          console.warn("audio-config.json: invalid baseUrl; using existing audio paths");
-          audioBaseUrl = "";
-        }
-        const makeAudioUrl = (url: string) => resolveQuizAudioUrl(url, audioBaseUrl, process.env.PUBLIC_URL || ".");
+        const makeAudioUrl = (url: string) => {
+          const value = url.trim();
+          if (!value) return undefined;
+          if (/^https?:\/\//i.test(value) || value.startsWith("/")) return value;
+          const relative = value.replace(/^\.\//, "");
+          if (relative.startsWith("audio/")) {
+            const base = (process.env.REACT_APP_AUDIO_BASE_URL || "https://pickyourstar-audio.dukae03.workers.dev").replace(/\/+$/, "");
+            // Encode path segments so #, ?, spaces and non-ASCII song titles stay in the key.
+            return `${base}/${relative.split("/").map(part => encodeURIComponent(part)).join("/")}`;
+          }
+          return `${process.env.PUBLIC_URL || "."}/${relative}`;
+        };
         if (cancelled) return;
         setQuizBaseAgencies(currentAgencies);
         const officialAliases = makeOfficialUnitAliases(currentAgencies.flatMap((a) => a.groups));
@@ -447,7 +443,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
             .split(/[|,]/)
             .map((s) => s.trim())
             .filter(Boolean);
-          const startMin = parseStartSeconds(stripQuotes(r.start_min || ""));
+          const startMin = Math.max(0, Number(stripQuotes(r.start_min || "")) || 15);
           const endMax = Math.max(0, Number(stripQuotes(r.end_max || "")) || 0);
 
           parsed.push({
@@ -502,9 +498,17 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     return Math.min(100, n);
   }, [countPreset, customCountInput]);
 
-  // Both local MP3 and YouTube use the same CSV-based timeline.
-  const pickClipStart = (song: SongItem, durationSec?: number) =>
-    chooseClipStart(song, clipMode, durationSec);
+  // 무작위 시작 위치(초) 뽑기
+  const pickRandomStart = (song: SongItem, durationSec?: number) => {
+    const minS = song.startMin || 15;
+    const maxS =
+      song.endMax > minS + 5
+        ? song.endMax
+        : durationSec && durationSec > minS + 20
+        ? Math.floor(durationSec - 15)
+        : 95;
+    return minS + Math.floor(Math.random() * Math.max(1, maxS - minS));
+  };
 
   const clearLocalPlayback = () => {
     if (localPlaybackStopRef.current !== null) {
@@ -747,7 +751,6 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
                 loadedVideoIdRef.current = wanted;
                 event.target.loadVideoById({ videoId: wanted, startSeconds: startSecRef.current });
               } else {
-                event.target.seekTo(startSecRef.current, true);
                 event.target.playVideo();
               }
             } else if (primeRequestRef.current) {
@@ -875,6 +878,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       // 실패한 재생을 대체하는 것이므로 듣기 횟수를 이중으로 차감하지 않습니다.
       setListenCount((count) => Math.max(0, count - 1));
     }
+    forgetQuizAudio(song.audioUrl!);
     failedAudioUrlsRef.current.add(song.audioUrl!);
     stopPlayerSafely();
     setFailedAudioVersion((version) => version + 1);
@@ -892,6 +896,8 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     audio.preload = "auto";
     localAudioRef.current = audio;
     let disposed = false;
+    const controller = new AbortController();
+    let blobUrl: string | null = null;
     let prepareTimer: number | null = null;
     const clearPrepareTimer = () => {
       if (prepareTimer !== null) window.clearTimeout(prepareTimer);
@@ -908,26 +914,29 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     const failed = () => {
       if (!disposed) {
         clearPrepareTimer();
+        controller.abort();
         fallbackToYouTube(song);
       }
     };
     audio.addEventListener("canplay", ready);
     audio.addEventListener("error", failed);
-    prepareTimer = window.setTimeout(failed, 8000);
-    try {
-      audio.src = song.audioUrl!;
+    prepareTimer = window.setTimeout(failed, 25000);
+    void loadQuizAudio(song.audioUrl!, controller.signal).then(blob => {
+      if (disposed || controller.signal.aborted) return;
+      blobUrl = URL.createObjectURL(blob);
+      audio.src = blobUrl;
       audio.load();
-    } catch {
-      failed();
-    }
+    }).catch(() => { if (!controller.signal.aborted) failed(); });
     return () => {
       disposed = true;
+      controller.abort();
       clearPrepareTimer();
       clearLocalPlayback();
       audio.removeEventListener("canplay", ready);
       audio.removeEventListener("error", failed);
       audio.removeAttribute("src");
-      audio.load(); // 진행 중인 다운로드도 중지
+      audio.load();
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
       if (localAudioRef.current === audio) localAudioRef.current = null;
     };
   }, [phase, currentSong?.id, status, usingHostedAudio]);
@@ -959,8 +968,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     setAutoplayBlocked(false);
     const cued = nextCuedRef.current;
     if (cued?.questionId !== song.id) nextCuedRef.current = null;
-    const initialStart = clipMode === "start" ? song.startMin
-      : cued?.questionId === song.id ? cued.start : pickClipStart(song);
+    const initialStart = cued?.questionId === song.id ? cued.start : pickRandomStart(song);
     currentSongRef.current = song;
     setCurrentSong(song);
     setClipDuration(1);
@@ -998,7 +1006,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     setPercentile(null);
     runIdRef.current = generateRoomId();
     completedRunRef.current = "";
-    trackAnalyticsEvent("quiz_started", { clip_mode: clipMode, difficulty: easyMode ? "easy" : "hard", question_count: count, pool_type: pool });
+    trackAnalyticsEvent("quiz_started", { difficulty: easyMode ? "easy" : "hard", question_count: count, pool_type: pool });
     nextCuedRef.current = null;
     setQuestionQueue(finalQueue);
     setQuestionIdx(0);
@@ -1126,7 +1134,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const playSnippet = (overrideSec?: number, overrideStart?: number, overrideSong?: SongItem) => {
     // YouTube가 재생을 준비하거나 1초 구간을 틀고 있는 동안 중복 요청하지 않습니다.
     // 같은 영상은 아래 ensurePlayerAndPlay에서 기존 iframe의 seekTo만 사용합니다.
-    if (pendingPlayRef.current) return;
+    if (pendingPlayRef.current || preparingAudio) return;
     const targetSong = overrideSong ?? currentSong;
     if (!targetSong) return;
 
@@ -1146,8 +1154,8 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
         loadedVideoIdRef.current === targetSong.videoId
       ) {
         const totalDur = Number(playerRef.current.getDuration?.() || 0);
-        if (clipMode === "random" && totalDur > 40 && targetStart >= totalDur - 10) {
-          targetStart = pickClipStart(targetSong, totalDur);
+        if (totalDur > 40 && targetStart >= totalDur - 10) {
+          targetStart = pickRandomStart(targetSong, totalDur);
           setStartSec(targetStart);
         }
       }
@@ -1168,13 +1176,13 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
 
   // 다른 1초 구간 뽑기
   const rerollSpot = () => {
-    if (clipMode !== "random" || pendingPlayRef.current || !currentSong) return;
+    if (pendingPlayRef.current || !currentSong) return;
     const totalDur = usesHostedAudio(currentSong)
       ? Number(localAudioRef.current?.duration || 0)
       : playerRef.current && playerReadyRef.current && loadedVideoIdRef.current === currentSong.videoId
         ? Number(playerRef.current?.getDuration?.() || 0)
         : 0;
-    const nextStart = pickClipStart(currentSong, totalDur > 0 ? totalDur : undefined);
+    const nextStart = pickRandomStart(currentSong, totalDur > 0 ? totalDur : undefined);
     setStartSec(nextStart);
     playSnippet(clipDuration, nextStart);
   };
@@ -1307,7 +1315,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
 
   // 배포된 분포 JSON이 활성화되기 전까지는 아무것도 표시하지 않음.
   useEffect(() => {
-    if (phase !== "summary" || clipMode === "start") return;
+    if (phase !== "summary") return;
     let cancelled = false;
     void loadQuizPercentileData().then((data) => {
       if (cancelled) return;
@@ -1316,7 +1324,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       ));
     });
     return () => { cancelled = true; };
-  }, [phase, easyMode, questionQueue.length, runPool, totalScore, clipMode]);
+  }, [phase, easyMode, questionQueue.length, runPool, totalScore]);
 
   // ───────── 결과 공유 (이미지 저장 · X 글쓰기 · 링크 복사) ─────────
   const [challenge, setChallenge] = useState<QuizResultInfo | null>(() => parseQuizChallenge(window.location.hash));
@@ -1364,7 +1372,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       return;
     }
     let cancelled = false;
-    renderQuizResultBlob(buildResultCardText(tRef.current, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, history, lang, clipMode))
+    renderQuizResultBlob(buildResultCardText(tRef.current, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, history, lang))
       .then((b) => {
         if (!cancelled) resultBlobRef.current = b;
       })
@@ -1374,12 +1382,12 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     return () => {
       cancelled = true;
     };
-  }, [phase, questionQueue.length, correctTotal, accuracyPercent, totalScore, easyMode, lang, history, clipMode]);
+  }, [phase, questionQueue.length, correctTotal, accuracyPercent, totalScore, easyMode, lang, history]);
 
-  const shareUrl = buildQuizShareUrl({ correct: correctTotal, total: questionQueue.length, easy: easyMode, score: totalScore, clipMode });
+  const shareUrl = buildQuizShareUrl({ correct: correctTotal, total: questionQueue.length, easy: easyMode, score: totalScore });
   const tweetText = t("quizShareTweetText", {
     title: t("quizTitle"),
-    mode: `${easyMode ? t("quizModeEasyShort") : t("quizModeHardShort")} · ${t(clipMode === "start" ? "quizClipStart" : "quizClipRandom")}`,
+    mode: easyMode ? t("quizModeEasyShort") : t("quizModeHardShort"),
     total: questionQueue.length,
     correct: correctTotal,
     percent: accuracyPercent,
@@ -1389,7 +1397,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const makeResultBlob = async (): Promise<Blob> => {
     if (resultBlobRef.current) return resultBlobRef.current;
     const b = await renderQuizResultBlob(
-      buildResultCardText(t, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, history, lang, clipMode)
+      buildResultCardText(t, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, history, lang)
     );
     resultBlobRef.current = b;
     return b;
@@ -1490,7 +1498,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
             <div className="sq-challenge" role="note">
               <span>
                 {t(challenge.score === undefined ? "quizChallengeBanner" : "quizChallengeBannerScore", {
-                  mode: `${challenge.easy ? t("quizModeEasyShort") : t("quizModeHardShort")} · ${t(challenge.clipMode === "start" ? "quizClipStart" : "quizClipRandom")}`,
+                  mode: challenge.easy ? t("quizModeEasyShort") : t("quizModeHardShort"),
                   total: challenge.total,
                   correct: challenge.correct,
                   percent: Math.round((challenge.correct / challenge.total) * 100),
@@ -1525,19 +1533,6 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
               </button>
             </div>
             <p className="sq-note">{easyMode ? t("quizEasyHint") : t("quizHardHint")}</p>
-          </div>
-
-          <div className="sq-field">
-            <h3 className="sq-label">{t("quizClipModeTitle")}</h3>
-            <div className="sq-seg">
-              {(["random", "start"] as const).map((mode) => (
-                <button type="button" key={mode} className={`sq-seg-btn${clipMode === mode ? " is-on" : ""}`}
-                  aria-pressed={clipMode === mode} onClick={() => setClipMode(mode)}>
-                  {t(mode === "random" ? "quizClipRandom" : "quizClipStart")}
-                </button>
-              ))}
-            </div>
-            <p className="sq-note">{t(clipMode === "random" ? "quizClipRandomHint" : "quizClipStartHint")}</p>
           </div>
 
           <div className="sq-field">
@@ -1707,11 +1702,10 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
         {playing && currentSong && !revealed && (
           <div className="sq-stage">
             <div className="sq-listen">
-              <p className="sq-note">{t(clipMode === "random" ? "quizClipRandom" : "quizClipStart")}</p>
               <button
                 type="button"
                 className={`sq-play-btn${isPlayingAudio ? " is-playing" : ""}`}
-                disabled={loadingAudio || isPlayingAudio}
+                disabled={preparingAudio || loadingAudio || isPlayingAudio}
                 onClick={() => playSnippet()}
               >
                 {loadingAudio
@@ -1727,15 +1721,13 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
               )}
               <div className="sq-tools">
                 {clipDuration < 5 && (
-                  <button type="button" className="sq-pill" disabled={loadingAudio || isPlayingAudio} onClick={extendDuration}>
+                  <button type="button" className="sq-pill" disabled={preparingAudio || loadingAudio || isPlayingAudio} onClick={extendDuration}>
                     {t("quizExtendSec", { sec: clipDuration + 1 })}
                   </button>
                 )}
-                {clipMode === "random" && (
-                  <button type="button" className="sq-pill" disabled={loadingAudio || isPlayingAudio} onClick={rerollSpot}>
-                    {t("quizChangeSpot")}
-                  </button>
-                )}
+                <button type="button" className="sq-pill" disabled={preparingAudio || loadingAudio || isPlayingAudio} onClick={rerollSpot}>
+                  {t("quizChangeSpot")}
+                </button>
               </div>
               {isInAppBrowser && (
                 <p className="sq-inapp-notice" role="note">{t("quizInAppBrowserNotice")}</p>
