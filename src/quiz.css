@@ -694,9 +694,37 @@
   text-align: left;
 }
 .sq-percentile {
-  margin: 12px 0;
-  font-weight: 700;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 22px 0 28px;
+  padding: 28px 16px;
+  border: 1px solid #ddd3f6;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #f7f0ff, #eef2ff);
+  box-shadow: 0 8px 24px rgba(102, 69, 170, 0.08);
   text-align: center;
+}
+.sq-percentile-label {
+  color: #665081;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.sq-percentile-value {
+  color: #6940aa;
+  font-size: clamp(2rem, 7vw, 3.6rem);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.sq-percentile-note {
+  max-width: 100%;
+  color: #6f6480;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  word-break: keep-all;
 }
 
 .sq-score-box {

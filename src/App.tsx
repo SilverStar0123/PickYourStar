@@ -8,6 +8,7 @@ import { LANG_KEY, LOCALE, detectInitialLang, normalizeLang, translate } from ".
 import type { Lang, MsgKey } from "./i18n";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import SongQuiz from "./SongQuiz";
+import TasteAnalysis, { tasteTitle } from "./TasteAnalysis";
 import { trackAnalyticsEvent } from "./analytics";
 import { auth, db } from "./firebaseClient";
 import { balancedMaxWidth, copyText, safeFileName, samePicks, withTimeout } from "./utils";
@@ -88,13 +89,15 @@ function PickYoursMain({ sheetId, onSwitchSheet }: {
   const [roomError, setRoomError] = useState(false);
 
   // 주소(#/quiz, ?page=quiz, ?tab=quiz, /quiz)를 읽어 초기 서비스 화면 결정
-  type ServiceId = "picks" | "quiz";
+  type ServiceId = "picks" | "quiz" | "taste";
   const detectServiceFromUrl = (): ServiceId => {
     const hash = window.location.hash.replace(/^#\/?/, "").split("?")[0].trim().toLowerCase();
+    if (hash === "taste") return "taste";
     if (hash === "quiz" || hash === "songquiz") return "quiz";
     if (hash === "picks" || hash === "home" || hash.startsWith("picks/")) return "picks";
     const sp = new URLSearchParams(window.location.search);
     const q = (sp.get("page") || sp.get("tab") || "").toLowerCase();
+    if (q === "taste") return "taste";
     if (q === "quiz" || q === "songquiz") return "quiz";
     if (/\/(quiz|songquiz)\/?$/i.test(window.location.pathname)) return "quiz";
     return "picks";
@@ -107,7 +110,7 @@ function PickYoursMain({ sheetId, onSwitchSheet }: {
   const navigateService = (target: ServiceId) => {
     setActiveTab(target);
     setDrawerOpen(false);
-    const targetHash = target === "quiz" ? "#/quiz" : sheetRoute;
+    const targetHash = target === "taste" ? "#/taste" : target === "quiz" ? "#/quiz" : sheetRoute;
     if (window.location.hash !== targetHash) {
       window.location.hash = targetHash;
     }
@@ -158,7 +161,7 @@ function PickYoursMain({ sheetId, onSwitchSheet }: {
   // 언어가 바뀌면 <html lang>과 탭 제목도 맞춤
   useEffect(() => {
     document.documentElement.lang = lang;
-    document.title = activeTab === "quiz" ? translate(lang, "quizTitle") : `${titleForSheet(lang)} | PickYours`;
+    document.title = activeTab === "taste" ? tasteTitle[lang] : activeTab === "quiz" ? translate(lang, "quizTitle") : `${titleForSheet(lang)} | PickYours`;
   }, [lang, activeTab]);
 
   // 주소에 ?lang= 이 실려 왔다면(앱 안 브라우저에서 넘어온 경우) 이 기기의 언어로 저장하고,
@@ -952,7 +955,8 @@ function PickYoursMain({ sheetId, onSwitchSheet }: {
       title: t("tabQuiz").replace(/^🎵\s*/, ""),
       desc: t("navDescQuiz"),
       hashPath: "#/quiz"
-    }
+    },
+    { id: "taste", icon: "📊", title: tasteTitle[lang], desc: lang === "ko" ? "함께 선택된 캐릭터로 찾는 취향" : lang === "ja" ? "一緒に選ばれるキャラクター" : "Discover co-selected characters", hashPath: "#/taste" }
   ];
 
   const currentService = serviceList.find((s) => s.id === activeTab) || serviceList[0];
@@ -960,7 +964,7 @@ function PickYoursMain({ sheetId, onSwitchSheet }: {
   const copyCurrentServiceUrl = async () => {
     const base = window.location.origin + window.location.pathname;
     const shareUrl =
-      activeTab === "quiz"
+      activeTab === "taste" ? `${base}#/taste` : activeTab === "quiz"
         ? `${base}#/quiz`
         : roomId
         ? `${base}?room=${roomId}${sheetRoute}`
@@ -1069,7 +1073,9 @@ function PickYoursMain({ sheetId, onSwitchSheet }: {
           ))}
         </nav>
       )}
-      {activeTab === "quiz" ? (
+      {activeTab === "taste" ? (
+        <TasteAnalysis lang={lang} />
+      ) : activeTab === "quiz" ? (
         <SongQuiz lang={lang} t={t} />
       ) : !showResult ? (
         <>

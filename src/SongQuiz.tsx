@@ -299,6 +299,7 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   const runIdRef = useRef("");
   const completedRunRef = useRef("");
   const runPoolRef = useRef<QuizPool>("all");
+  const runUnitRef = useRef<string | undefined>(undefined);
   const [runPool, setRunPool] = useState<QuizPool>("all");
   const [percentile, setPercentile] = useState<QuizPercentile | null>(null);
 
@@ -330,9 +331,9 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
       pool_type: pool,
       score: summary.score
     });
-    if (clipMode === "start") return;
     void saveQuizCompletion({
-      attemptId: runId, mode, questionCount: questionQueue.length, pool,
+      attemptId: runId, mode, clipMode, questionCount: questionQueue.length, pool,
+      unitId: runUnitRef.current,
       score: summary.score, perfect: summary.perfect,
       otherCorrect: summary.otherCorrect, giveup: summary.giveup
     }).catch((err) => console.warn("퀴즈 점수 저장 실패 (게임은 정상 진행):", err));
@@ -1002,7 +1003,11 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
     }
     const finalQueue = queue.slice(0, count);
     // 선택 유닛 제한 여부는 시작 시점에 고정 (결과 통계의 비교군을 구분).
-    const pool: QuizPool = filteredSongs.length === songs.length ? "all" : "filtered";
+    const onlyUnit = selectedUnits.size === 1 ? Array.from(selectedUnits)[0] : undefined;
+    // 테스트용 음원 제한은 일반 비교군으로 저장하지 않음.
+    const pool: QuizPool = process.env.REACT_APP_QUIZ_AUDIO_TEST_ONLY === "true" ? "filtered"
+      : filteredSongs.length === songs.length ? "all" : onlyUnit ? "unit" : "filtered";
+    runUnitRef.current = pool === "unit" ? onlyUnit : undefined;
     runPoolRef.current = pool;
     setRunPool(pool);
     setPercentile(null);
@@ -1317,12 +1322,13 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
 
   // 배포된 분포 JSON이 활성화되기 전까지는 아무것도 표시하지 않음.
   useEffect(() => {
-    if (phase !== "summary" || clipMode === "start") return;
+    if (phase !== "summary") return;
+    setPercentile(null);
     let cancelled = false;
     void loadQuizPercentileData().then((data) => {
       if (cancelled) return;
       setPercentile(calculateQuizPercentile(
-        data, easyMode ? "easy" : "hard", questionQueue.length, runPool, totalScore
+        data, easyMode ? "easy" : "hard", questionQueue.length, runPool, totalScore, clipMode
       ));
     });
     return () => { cancelled = true; };
@@ -1377,9 +1383,19 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
   });
   const tweetUrl = buildTweetIntentUrl({ text: tweetText, url: shareUrl, hashtags: QUIZ_SHARE_HASHTAGS });
   const makeResultBlob = async (): Promise<Blob> => {
-    const b = await renderQuizResultBlob(
-      buildResultCardText(t, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, history, lang, clipMode)
+    // 저장을 바로 눌러도 분포 로딩을 기다려 화면과 같은 계산 결과를 사용합니다.
+    const data = await loadQuizPercentileData();
+    const rank = calculateQuizPercentile(
+      data, easyMode ? "easy" : "hard", questionQueue.length, runPool, totalScore, clipMode
     );
+    const b = await renderQuizResultBlob({
+      ...buildResultCardText(t, correctTotal, questionQueue.length, easyMode, accuracyPercent, totalScore, history, lang, clipMode),
+      percentile: rank ? {
+        label: t("quizPercentileLabel"),
+        value: t("quizTopPercentile", { percent: rank.topPercent }),
+        note: t("quizPercentileNote")
+      } : undefined
+    });
     return b;
   };
 
@@ -1895,9 +1911,13 @@ export default function SongQuiz({ lang, t }: SongQuizProps) {
           </div>
 
           {percentile && (
-            <p className="sq-percentile" role="status">
-              {t("quizTopPercentile", { percent: percentile.topPercent, samples: percentile.samples })}
-            </p>
+            <div className="sq-percentile" role="status">
+              <span className="sq-percentile-label">{t("quizPercentileLabel")}</span>
+              <strong className="sq-percentile-value">
+                {t("quizTopPercentile", { percent: percentile.topPercent })}
+              </strong>
+              <span className="sq-percentile-note">{t("quizPercentileNote")}</span>
+            </div>
           )}
 
           <h3 className="sq-label sq-hist-head">

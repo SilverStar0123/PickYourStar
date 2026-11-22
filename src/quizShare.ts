@@ -92,6 +92,7 @@ export interface ResultCardText {
   detail: string;
   modeLabel: string;
   scoreText: string;
+  percentile?: { label: string; value: string; note: string };
   footer: string;
   percent: number;
   stats: QuizPlaySummary;
@@ -160,7 +161,8 @@ function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): str
 // 상단 정답률/점수는 유지하고, 하단은 실제 문제별 재생 기록으로 표시합니다.
 export function renderQuizResultBlob(c: ResultCardText): Promise<Blob> {
   const W = 1200;
-  const H = 980;
+  const rankHeight = c.percentile ? 160 : 0;
+  const H = 980 + rankHeight;
   const S = 2;
   const canvas = document.createElement("canvas");
   canvas.width = W * S;
@@ -257,6 +259,21 @@ export function renderQuizResultBlob(c: ResultCardText): Promise<Blob> {
   ctx.font = `800 42px ${FONT}`;
   ctx.fillText(c.scoreText, x0, y + 8, maxW);
 
+  if (c.percentile) {
+    ctx.fillStyle = "#f3edfc";
+    roundRect(ctx, 96, 440, W - 192, 140, 24);
+    ctx.fill();
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#665081";
+    ctx.font = `700 24px ${FONT}`;
+    ctx.fillText(c.percentile.label, W / 2, 477, W - 240);
+    ctx.fillStyle = "#6940aa";
+    ctx.font = `800 62px ${FONT}`;
+    ctx.fillText(c.percentile.value, W / 2, 546, W - 240);
+  }
+  ctx.save();
+  ctx.translate(0, rankHeight);
+
   // 구분선 및 플레이 기록 타이틀
   ctx.save();
   ctx.setLineDash([8, 8]);
@@ -345,7 +362,8 @@ export function renderQuizResultBlob(c: ResultCardText): Promise<Blob> {
   ctx.textAlign = "center";
   ctx.fillStyle = "#98a2b3";
   ctx.font = `600 24px ${FONT}`;
-  ctx.fillText(c.footer, W / 2, H - 62, W - 200);
+  ctx.fillText(c.footer, W / 2, 980 - 62, W - 200);
+  ctx.restore();
 
   return new Promise<Blob>((resolve, reject) =>
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob 실패"))), "image/png")

@@ -4,13 +4,15 @@ import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebaseClient";
 
 export type QuizMode = "easy" | "hard";
-export type QuizPool = "all" | "filtered";
+export type QuizPool = "all" | "unit" | "filtered";
 
 export interface QuizCompletion {
   attemptId: string; // 게임 시작 시 생성한 무작위 12자 ID (재시도 시에도 동일)
   mode: QuizMode;
+  clipMode: "random" | "start";
   questionCount: number;
   pool: QuizPool;
+  unitId?: string;
   score: number;
   perfect: number;
   otherCorrect: number;
@@ -21,6 +23,8 @@ export const QUIZ_SCORE_COLLECTION_ENABLED = process.env.REACT_APP_QUIZ_SCORE_CO
 
 export async function saveQuizCompletion(item: QuizCompletion): Promise<void> {
   if (!QUIZ_SCORE_COLLECTION_ENABLED || process.env.NODE_ENV !== "production") return;
+  if (item.pool === "filtered" ||
+      (item.pool === "unit" && (!item.unitId || !item.unitId.trim()))) return;
   // 초기 익명 인증이 아직 끝나지 않은 경우를 대비합니다.
   await auth.authStateReady();
   const user = auth.currentUser;
@@ -33,13 +37,15 @@ export async function saveQuizCompletion(item: QuizCompletion): Promise<void> {
   await setDoc(doc(db, "quizScores", item.attemptId), {
     uid: user.uid,
     mode: item.mode,
+    clipMode: item.clipMode,
     questionCount: item.questionCount,
     pool: item.pool,
+    ...(item.pool === "unit" ? { unitId: item.unitId } : {}),
     score: item.score,
     perfect: item.perfect,
     otherCorrect: item.otherCorrect,
     giveup: item.giveup,
     completedAt: serverTimestamp(),
-    v: 1
+    v: 3
   });
 }
